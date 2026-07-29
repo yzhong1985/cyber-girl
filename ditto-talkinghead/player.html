@@ -1,0 +1,56 @@
+<!doctype html><html lang=zh><head><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<title>cyber girl</title>
+<style>
+ html,body{margin:0;height:100%;overflow:hidden;font-family:system-ui,"Microsoft YaHei",sans-serif}
+ /* 背景层: 暗色柔光渐变(想换成场景图: 给 #stage 设 background-image 即可) */
+ #stage{position:fixed;inset:0;overflow:hidden;
+   background:radial-gradient(ellipse 70% 60% at 50% 34%, #2b2e3c 0%, #191a22 52%, #0b0b0f 100%)}
+ /* 透明人像(待命循环 / 回复视频): 居中铺满高度, 靠自身微动"活" */
+ .avatar{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+   height:100vh;max-width:100vw;object-fit:contain;z-index:1;background:transparent}
+ /* 待命时给一点“呼吸”起伏(纯上下缩放, 不旋转不歪), 让身体也似乎在轻微动 */
+ :root{ --breath:1.018; --breath-time:4.5s; }
+ #idle{transform-origin:50% 100%;
+   animation:breathe var(--breath-time) ease-in-out infinite}
+ @keyframes breathe{
+   0%,100%{transform:translate(-50%,-50%) scaleY(1)}
+   50%    {transform:translate(-50%,-50%) scaleY(var(--breath))}}
+ #vid{display:none}
+ #hud{position:fixed;left:12px;top:10px;color:#8a8aa0;font-size:13px;z-index:3}
+ #hud b{color:#9fc4ff}
+ #gate{position:fixed;inset:0;background:#0b0b0fcc;display:flex;align-items:center;justify-content:center;
+   cursor:pointer;z-index:4}
+ #gate div{color:#e8e8ef;font-size:18px;padding:14px 26px;border:1px solid #33334a;border-radius:12px;background:#16161f}
+</style></head><body>
+<div id=stage>
+  <video id=idle class=avatar src="/video/idle_loop.mp4" loop muted autoplay playsinline></video>
+  <video id=vid class=avatar playsinline></video>
+</div>
+<div id=hud>cyber girl · <b id=st>待命</b></div>
+<div id=gate><div>▶ 点击进入</div></div>
+<script>
+ const idle=document.getElementById('idle'), vid=document.getElementById('vid'),
+       st=document.getElementById('st'), gate=document.getElementById('gate');
+ const q=[]; let playing=false, ready=false;
+ const IDLE_RATE=0.2;                 // 待命头部动作速度(1=原速, 越小越慢越稳)
+ idle.playbackRate=IDLE_RATE;
+ idle.play().catch(()=>{});
+ gate.onclick=()=>{ready=true; gate.style.display='none'; idle.play().catch(()=>{}); pump();};
+ function showIdle(){
+   vid.style.display='none'; vid.pause();
+   idle.style.display='block'; idle.playbackRate=IDLE_RATE; idle.play().catch(()=>{}); st.textContent='待命';
+ }
+ function pump(){
+   if(playing||!ready) return;
+   const next=q.shift();
+   if(!next){showIdle(); return;}
+   playing=true; st.textContent='说话中';
+   idle.pause(); idle.style.display='none';
+   vid.style.display='block'; vid.muted=false; vid.src=next; vid.play().catch(()=>{playing=false;});
+ }
+ vid.onended=()=>{playing=false; showIdle(); pump();};
+ vid.onerror=()=>{playing=false; showIdle(); pump();};
+ const es=new EventSource('/events');
+ es.onmessage=e=>{try{const d=JSON.parse(e.data); if(d.video){q.push(d.video); pump();}}catch(_){}};
+</script></body></html>

@@ -1,0 +1,438 @@
+<title>cyber girl · 网页版设计</title>
+<style>
+  :root{
+    --bg:#f5f6f9; --surface:#ffffff; --surface-2:#eceff4; --sunken:#f0f2f6;
+    --ink:#14161c; --ink-soft:#464c59; --ink-faint:#7c8393; --line:#e0e4ec;
+    --accent:#0c8fa1; --accent-soft:#0c8fa118; --accent-2:#b0568c;
+    --ok:#2e9e5b; --warn:#bd7a1a; --crit:#cf4a4a;
+    --ok-bg:#2e9e5b14; --warn-bg:#bd7a1a16; --crit-bg:#cf4a4a14;
+    --font-sans:system-ui,-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei","Noto Sans CJK SC",sans-serif;
+    --font-mono:ui-monospace,"SF Mono","Cascadia Code","JetBrains Mono",Menlo,Consolas,monospace;
+    --maxw:920px;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --bg:#0c0d12; --surface:#14151d; --surface-2:#1b1d27; --sunken:#101119;
+      --ink:#e9ebf1; --ink-soft:#a9adba; --ink-faint:#6c7183; --line:#262a37;
+      --accent:#37c6d6; --accent-soft:#37c6d61f; --accent-2:#d98cbb;
+      --ok:#48c07c; --warn:#e0a54a; --crit:#e56b6b;
+      --ok-bg:#48c07c1c; --warn-bg:#e0a54a1c; --crit-bg:#e56b6b1c;
+    }
+  }
+  :root[data-theme="light"]{
+    --bg:#f5f6f9; --surface:#ffffff; --surface-2:#eceff4; --sunken:#f0f2f6;
+    --ink:#14161c; --ink-soft:#464c59; --ink-faint:#7c8393; --line:#e0e4ec;
+    --accent:#0c8fa1; --accent-soft:#0c8fa118; --accent-2:#b0568c;
+    --ok:#2e9e5b; --warn:#bd7a1a; --crit:#cf4a4a;
+    --ok-bg:#2e9e5b14; --warn-bg:#bd7a1a16; --crit-bg:#cf4a4a14;
+  }
+  :root[data-theme="dark"]{
+    --bg:#0c0d12; --surface:#14151d; --surface-2:#1b1d27; --sunken:#101119;
+    --ink:#e9ebf1; --ink-soft:#a9adba; --ink-faint:#6c7183; --line:#262a37;
+    --accent:#37c6d6; --accent-soft:#37c6d61f; --accent-2:#d98cbb;
+    --ok:#48c07c; --warn:#e0a54a; --crit:#e56b6b;
+    --ok-bg:#48c07c1c; --warn-bg:#e0a54a1c; --crit-bg:#e56b6b1c;
+  }
+
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--font-sans);
+    line-height:1.65;-webkit-font-smoothing:antialiased;font-size:16px}
+  .wrap{max-width:var(--maxw);margin:0 auto;padding:clamp(28px,5vw,72px) clamp(18px,4vw,40px) 96px}
+
+  /* ---- header ---- */
+  header{margin-bottom:56px}
+  .kicker{font-family:var(--font-mono);font-size:12px;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--accent);display:flex;align-items:center;gap:10px;margin-bottom:20px}
+  .kicker .pulse{width:7px;height:7px;border-radius:50%;background:var(--accent);
+    box-shadow:0 0 0 0 var(--accent-soft);animation:pulse 2.6s ease-out infinite}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 var(--accent-soft)}70%{box-shadow:0 0 0 9px transparent}100%{box-shadow:0 0 0 0 transparent}}
+  h1{font-size:clamp(30px,5.2vw,46px);line-height:1.08;letter-spacing:-.02em;margin:0 0 16px;
+    text-wrap:balance;font-weight:680}
+  h1 .accent{color:var(--accent)}
+  .lede{font-size:clamp(16px,2.1vw,18.5px);color:var(--ink-soft);max-width:60ch;margin:0}
+  .meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:24px}
+  .tag{font-family:var(--font-mono);font-size:12px;color:var(--ink-soft);
+    background:var(--surface-2);border:1px solid var(--line);border-radius:999px;padding:5px 12px}
+  .tag b{color:var(--ink);font-weight:600}
+
+  /* ---- section ---- */
+  section{margin-top:60px;scroll-margin-top:24px}
+  .sec-head{display:flex;align-items:baseline;gap:14px;margin-bottom:22px;
+    padding-bottom:14px;border-bottom:1px solid var(--line)}
+  .sec-num{font-family:var(--font-mono);font-size:12.5px;color:var(--accent);letter-spacing:.1em;
+    font-variant-numeric:tabular-nums;white-space:nowrap}
+  h2{font-size:clamp(21px,3vw,26px);margin:0;letter-spacing:-.01em;font-weight:640;text-wrap:balance}
+  .sec-sub{font-family:var(--font-mono);font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;
+    color:var(--ink-faint);margin-left:auto;white-space:nowrap}
+  p{margin:0 0 14px;max-width:66ch}
+  p.wide{max-width:none}
+  strong{font-weight:640}
+  a{color:var(--accent);text-underline-offset:3px}
+
+  /* ---- shift: now vs web ---- */
+  .shift{display:grid;grid-template-columns:1fr auto 1fr;gap:0;align-items:stretch;
+    border:1px solid var(--line);border-radius:14px;overflow:hidden;background:var(--surface)}
+  .shift .col{padding:22px 24px}
+  .shift .col.web{background:var(--accent-soft)}
+  .shift .arrow{display:flex;align-items:center;justify-content:center;color:var(--accent);
+    font-size:22px;padding:0 6px;background:var(--surface-2)}
+  .shift .lbl{font-family:var(--font-mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;
+    color:var(--ink-faint);margin-bottom:10px}
+  .shift .web .lbl{color:var(--accent)}
+  .shift p{margin:0;font-size:15px;color:var(--ink-soft)}
+  .shift .web p{color:var(--ink)}
+  @media(max-width:640px){.shift{grid-template-columns:1fr}.shift .arrow{padding:8px;transform:rotate(90deg)}}
+
+  /* ---- architecture stack ---- */
+  .stack{display:flex;flex-direction:column;gap:14px}
+  .band{border:1px solid var(--line);border-radius:14px;background:var(--surface);padding:18px 20px}
+  .band.client{border-color:color-mix(in srgb,var(--accent) 40%,var(--line))}
+  .band.server{border-color:color-mix(in srgb,var(--accent-2) 32%,var(--line))}
+  .band-top{display:flex;align-items:center;gap:10px;margin-bottom:14px}
+  .band-top .zone{font-family:var(--font-mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--ink-faint)}
+  .band-top .zone .loc{color:var(--ink);font-weight:600}
+  .band-top .badge{margin-left:auto;font-family:var(--font-mono);font-size:11px;padding:3px 9px;border-radius:6px;
+    background:var(--surface-2);color:var(--ink-soft);border:1px solid var(--line)}
+  .row{display:flex;flex-wrap:wrap;gap:10px}
+  .node{flex:1 1 150px;min-width:140px;background:var(--sunken);border:1px solid var(--line);
+    border-radius:10px;padding:12px 14px}
+  .node .n-t{font-size:14.5px;font-weight:600;margin-bottom:3px}
+  .node .n-d{font-size:12.5px;color:var(--ink-faint);font-family:var(--font-mono)}
+  .node.gpu{border-color:color-mix(in srgb,var(--accent-2) 45%,var(--line))}
+  .node.gpu .n-t{color:var(--accent-2)}
+  .link{display:flex;align-items:center;justify-content:center;gap:12px;
+    font-family:var(--font-mono);font-size:11.5px;color:var(--accent);letter-spacing:.06em;padding:2px 0}
+  .link::before,.link::after{content:"";height:1px;flex:1;max-width:120px;
+    background:linear-gradient(90deg,transparent,var(--accent),transparent);opacity:.5}
+
+  /* ---- signal chain ---- */
+  .chain-scroll{overflow-x:auto;padding:6px 0 10px;margin:0 -4px}
+  .chain{display:flex;align-items:stretch;gap:0;min-width:min-content}
+  .stage{flex:0 0 auto;min-width:132px;background:var(--surface);border:1px solid var(--line);
+    border-radius:12px;padding:14px 16px;position:relative}
+  .stage .s-i{font-family:var(--font-mono);font-size:11px;color:var(--accent);letter-spacing:.1em;margin-bottom:8px}
+  .stage .s-t{font-weight:640;font-size:15px}
+  .stage .s-m{font-family:var(--font-mono);font-size:12px;color:var(--ink-faint);margin-top:3px}
+  .conn{flex:0 0 auto;display:flex;align-items:center;color:var(--ink-faint);padding:0 4px;font-size:18px}
+  .chain .mic,.chain .spk{background:var(--accent-soft);border-color:color-mix(in srgb,var(--accent) 45%,var(--line))}
+
+  /* ---- tables ---- */
+  .t-scroll{overflow-x:auto;border:1px solid var(--line);border-radius:12px}
+  table{width:100%;border-collapse:collapse;font-size:14.5px;min-width:560px}
+  th,td{text-align:left;padding:12px 16px;vertical-align:top;border-bottom:1px solid var(--line)}
+  thead th{font-family:var(--font-mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;
+    color:var(--ink-faint);font-weight:600;background:var(--surface-2)}
+  tbody tr:last-child td{border-bottom:none}
+  tbody tr:hover{background:var(--accent-soft)}
+  td.k{font-weight:600;white-space:nowrap}
+  td .why{color:var(--ink-soft);font-size:13.5px}
+  .pill{font-family:var(--font-mono);font-size:11px;padding:2px 8px;border-radius:5px;white-space:nowrap;
+    background:var(--surface-2);border:1px solid var(--line);color:var(--ink-soft)}
+  .pill.v1{color:var(--accent);border-color:color-mix(in srgb,var(--accent) 40%,var(--line))}
+
+  /* ---- flow (numbered turn) ---- */
+  .flow{display:flex;flex-direction:column;gap:2px;counter-reset:step}
+  .step{display:grid;grid-template-columns:auto 1fr;gap:16px;padding:13px 0;border-bottom:1px dashed var(--line)}
+  .step:last-child{border-bottom:none}
+  .step .num{font-family:var(--font-mono);font-variant-numeric:tabular-nums;font-size:13px;color:var(--accent);
+    font-weight:600;padding-top:2px}
+  .step .txt{font-size:15px}
+  .step .txt b{font-weight:640}
+  .step .txt .dir{font-family:var(--font-mono);font-size:11px;color:var(--ink-faint);
+    border:1px solid var(--line);border-radius:5px;padding:1px 6px;margin-left:6px;white-space:nowrap}
+
+  /* ---- three columns reuse/replace/new ---- */
+  .cols3{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px}
+  .card{border:1px solid var(--line);border-radius:14px;background:var(--surface);padding:18px 20px}
+  .card h3{margin:0 0 12px;font-size:13px;font-family:var(--font-mono);letter-spacing:.08em;text-transform:uppercase;
+    display:flex;align-items:center;gap:8px}
+  .card.reuse h3{color:var(--ok)} .card.replace h3{color:var(--warn)} .card.new h3{color:var(--accent)}
+  .card ul{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:9px}
+  .card li{font-size:14px;color:var(--ink-soft);padding-left:18px;position:relative}
+  .card li::before{content:"";position:absolute;left:0;top:9px;width:6px;height:6px;border-radius:2px;background:currentColor;opacity:.5}
+  .card.reuse li{color:var(--ink)} .card.reuse li::before{background:var(--ok)}
+  .card.replace li::before{background:var(--warn)}
+  .card.new li::before{background:var(--accent)}
+  .card li b{color:var(--ink);font-weight:600}
+
+  /* ---- constraints ---- */
+  .constraints{display:flex;flex-direction:column;gap:12px}
+  .con{display:grid;grid-template-columns:auto 1fr;gap:16px;border:1px solid var(--line);border-radius:12px;
+    background:var(--surface);padding:16px 18px 16px 0;overflow:hidden}
+  .con .stripe{width:5px;align-self:stretch;border-radius:0}
+  .con.crit .stripe{background:var(--crit)} .con.warn .stripe{background:var(--warn)}
+  .con .body{padding-left:2px}
+  .con .c-h{display:flex;align-items:center;gap:10px;margin-bottom:5px}
+  .con .c-h .sev{font-family:var(--font-mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;
+    padding:2px 8px;border-radius:5px}
+  .con.crit .sev{background:var(--crit-bg);color:var(--crit)}
+  .con.warn .sev{background:var(--warn-bg);color:var(--warn)}
+  .con .c-t{font-weight:640;font-size:15.5px}
+  .con .c-d{font-size:14px;color:var(--ink-soft);margin:0}
+  .con .c-d code{font-family:var(--font-mono);font-size:12.5px;background:var(--surface-2);
+    padding:1px 6px;border-radius:5px;border:1px solid var(--line)}
+
+  /* ---- phases ---- */
+  .phases{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px}
+  .phase{border:1px solid var(--line);border-radius:14px;background:var(--surface);padding:20px;position:relative}
+  .phase .p-tag{font-family:var(--font-mono);font-size:12px;color:var(--accent);letter-spacing:.08em;font-weight:600}
+  .phase .p-scope{font-family:var(--font-mono);font-size:11px;color:var(--ink-faint);text-transform:uppercase;
+    letter-spacing:.1em;margin-top:2px}
+  .phase h3{font-size:16px;margin:12px 0 10px;font-weight:640}
+  .phase ul{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:6px}
+  .phase li{font-size:13.5px;color:var(--ink-soft)}
+  .phase .eta{margin-top:14px;padding-top:12px;border-top:1px solid var(--line);
+    font-size:12.5px;color:var(--ink-faint);font-family:var(--font-mono)}
+  .phase.p1{border-top:3px solid var(--accent)}
+
+  /* ---- footer ---- */
+  footer{margin-top:64px;padding-top:22px;border-top:1px solid var(--line);
+    font-size:13.5px;color:var(--ink-faint);font-family:var(--font-mono);line-height:1.8}
+  footer b{color:var(--ink-soft);font-weight:600}
+
+  @media (prefers-reduced-motion:reduce){*{animation:none!important}}
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="kicker"><span class="pulse"></span>DESIGN SPEC · 未实现 / 待评审</div>
+    <h1>把「赛博 AI 女友」<br>搬进<span class="accent">浏览器</span></h1>
+    <p class="lede">现有系统把语音绑死在本机麦克风/扬声器上（WSLg），浏览器只负责显示。网页版让整套交互跑在浏览器里——任意设备都能用，还顺手甩掉一堆 WSL 音频的坑。</p>
+    <div class="meta">
+      <span class="tag">底座 <b>speech-to-speech</b></span>
+      <span class="tag">GPU <b>RTX 5090</b></span>
+      <span class="tag">模型侧 <b>全部复用</b></span>
+      <span class="tag">形象 <b>Live2D</b></span>
+    </div>
+  </header>
+
+  <section>
+    <div class="sec-head">
+      <span class="sec-num">01</span>
+      <h2>核心转变</h2>
+      <span class="sec-sub">Local I/O → Browser I/O</span>
+    </div>
+    <div class="shift">
+      <div class="col">
+        <div class="lbl">现在 · 本机</div>
+        <p>麦克风/扬声器走 WSLg PulseAudio，页面只是显示层。换台设备就用不了，音频链路脆弱（<code>sd.play</code>、asoundrc、回声全靠土办法）。</p>
+      </div>
+      <div class="arrow">→</div>
+      <div class="col web">
+        <div class="lbl">网页版 · 浏览器</div>
+        <p>浏览器采音 → 传服务器跑 VAD/STT/LLM/TTS → 音频传回浏览器播放并驱动立绘。手机、平板、局域网任意设备可用，回声消除交给浏览器原生。</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <span class="sec-num">02</span>
+      <h2>总体架构</h2>
+      <span class="sec-sub">Browser · Transport · Server</span>
+    </div>
+    <div class="stack">
+      <div class="band client">
+        <div class="band-top"><span class="zone">前端 · <span class="loc">浏览器（任意设备）</span></span><span class="badge">单页 App</span></div>
+        <div class="row">
+          <div class="node mic"><div class="n-t">🎤 采音</div><div class="n-d">AudioWorklet · PCM16@16k</div></div>
+          <div class="node"><div class="n-t">对话字幕</div><div class="n-d">STT 文字 + LLM 回复</div></div>
+          <div class="node"><div class="n-t">人格 / 音色切换</div><div class="n-d">小满 · 凛 · …</div></div>
+          <div class="node spk"><div class="n-t">🔊 播放 + 立绘</div><div class="n-d">WebAudio · Live2D 口型</div></div>
+        </div>
+      </div>
+      <div class="link">WSS ↕ 加密（手机访问必须）· 上行音频 / 下行音频·字幕·控制</div>
+      <div class="band server">
+        <div class="band-top"><span class="zone">后端 · <span class="loc">WSL2 服务器</span></span><span class="badge">GPU 常驻</span></div>
+        <div class="row" style="margin-bottom:12px">
+          <div class="node"><div class="n-t">WS 网关</div><div class="n-d">FastAPI · 会话管理</div></div>
+          <div class="node"><div class="n-t">音频桥</div><div class="n-d">替换 LocalAudioStreamer</div></div>
+        </div>
+        <div class="row" style="margin-bottom:12px">
+          <div class="node"><div class="n-t">Silero VAD</div><div class="n-d">断句 / 打断</div></div>
+          <div class="node"><div class="n-t">Whisper STT</div><div class="n-d">large-v3-turbo</div></div>
+          <div class="node"><div class="n-t">Qwen3-TTS</div><div class="n-d">faster-qwen3-tts</div></div>
+        </div>
+        <div class="row">
+          <div class="node gpu"><div class="n-t">Windows llama-server</div><div class="n-d">Qwen3-14B · RTX 5090</div></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <span class="sec-num">03</span>
+      <h2>信号链</h2>
+      <span class="sec-sub">你说话 → 你听到</span>
+    </div>
+    <p>四个模型接力，一路流式。模型侧和现在完全一样，只是首尾的音频通道从"本机声卡"换成"浏览器"。</p>
+    <div class="chain-scroll">
+      <div class="chain">
+        <div class="stage mic"><div class="s-i">IN</div><div class="s-t">🎤 麦克风</div><div class="s-m">浏览器采集</div></div>
+        <div class="conn">→</div>
+        <div class="stage"><div class="s-i">VAD</div><div class="s-t">断句</div><div class="s-m">Silero v5</div></div>
+        <div class="conn">→</div>
+        <div class="stage"><div class="s-i">STT</div><div class="s-t">转文字</div><div class="s-m">Whisper</div></div>
+        <div class="conn">→</div>
+        <div class="stage"><div class="s-i">LLM</div><div class="s-t">想回复</div><div class="s-m">Qwen3-14B</div></div>
+        <div class="conn">→</div>
+        <div class="stage"><div class="s-i">TTS</div><div class="s-t">合成语音</div><div class="s-m">Qwen3-TTS</div></div>
+        <div class="conn">→</div>
+        <div class="stage spk"><div class="s-i">OUT</div><div class="s-t">🔊 播放</div><div class="s-m">浏览器 + 口型</div></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <span class="sec-num">04</span>
+      <h2>技术选型</h2>
+      <span class="sec-sub">Choice · Rationale</span>
+    </div>
+    <div class="t-scroll">
+      <table>
+        <thead><tr><th>模块</th><th>方案</th><th>为什么</th></tr></thead>
+        <tbody>
+          <tr><td class="k">音频上行</td><td><span class="pill v1">v1</span> WebSocket 传 PCM16<br><span class="pill">v2</span> WebRTC</td><td class="why">WS 简单，直接复用 speech-to-speech 现成的 socket/websocket 模式；WebRTC 后期升级，自带回声消除、抖动缓冲、低延迟</td></tr>
+          <tr><td class="k">回声消除</td><td>浏览器 <code style="font-family:var(--font-mono);font-size:12.5px">getUserMedia&#123;echoCancellation&#125;</code></td><td class="why">比现在服务端"播放时不采集"的土办法好得多——能边说边听、真打断</td></tr>
+          <tr><td class="k">VAD / 打断</td><td><span class="pill v1">v1</span> 服务端 Silero<br><span class="pill">v2</span> 浏览器端 vad-web</td><td class="why">先复用现成 Silero；客户端 VAD 更省带宽、打断更快</td></tr>
+          <tr><td class="k">口型同步</td><td>浏览器对<b>正在播放</b>的音频取音量 → 驱动 ParamMouthOpenY</td><td class="why">在客户端算，比现在服务端 SSE 推送更准、更跟手</td></tr>
+          <tr><td class="k">STT / LLM / TTS</td><td>原封不动，全在 5090 上</td><td class="why">重模型不动，只换前后的音频通道</td></tr>
+          <tr><td class="k">前端</td><td>单页 App · pixi-live2d-display · WebAudio</td><td class="why">Live2D 资源直接复用现有的</td></tr>
+          <tr><td class="k">后端网关</td><td>FastAPI + WebSocket</td><td class="why">把浏览器音频桥接到管线的收/发队列，替换 LocalAudioStreamer</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <span class="sec-num">05</span>
+      <h2>一次对话的数据流</h2>
+      <span class="sec-sub">One Turn</span>
+    </div>
+    <div class="flow">
+      <div class="step"><div class="num">1</div><div class="txt">浏览器采麦克风 → 16k PCM16 → 持续上行 <span class="dir">WS ↑</span></div></div>
+      <div class="step"><div class="num">2</div><div class="txt">服务端 VAD 判断说完 → Whisper 转文字 → 回传字幕 <span class="dir">WS ↓ 文本</span></div></div>
+      <div class="step"><div class="num">3</div><div class="txt">LLM 流式生成回复（按句）→ 回传字幕 <span class="dir">WS ↓ 文本</span></div></div>
+      <div class="step"><div class="num">4</div><div class="txt">每句 Qwen3-TTS 合成 → 音频块流式下行 <span class="dir">WS ↓ 音频</span></div></div>
+      <div class="step"><div class="num">5</div><div class="txt">浏览器 WebAudio 播放 + 同一音频驱动嘴型 <span class="dir">本地</span></div></div>
+      <div class="step"><div class="num">6</div><div class="txt"><b>打断：</b>播放中用户开口 → 浏览器（回声消除后）VAD 触发 → 发打断帧 → 服务端清空 TTS 队列、浏览器停播 <span class="dir">WS ↕ 控制</span></div></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <span class="sec-num">06</span>
+      <h2>复用 · 替换 · 新增</h2>
+      <span class="sec-sub">改动边界</span>
+    </div>
+    <div class="cols3">
+      <div class="card reuse">
+        <h3>◆ 直接复用</h3>
+        <ul>
+          <li>5090 上的 <b>Whisper / LLM / TTS</b> 全部</li>
+          <li><b>Windows llama-server</b></li>
+          <li><b>Live2D</b> 资源与模型</li>
+          <li>人格/音色 <b>characters.json</b></li>
+        </ul>
+      </div>
+      <div class="card replace">
+        <h3>◆ 替换</h3>
+        <ul>
+          <li><b>LocalAudioStreamer</b>（WSLg 音频）→ WebSocket 音频桥</li>
+          <li>8900 / 8901 两个页面 → 合并成<b>一个网页 App</b></li>
+        </ul>
+      </div>
+      <div class="card new">
+        <h3>◆ 新增</h3>
+        <ul>
+          <li><b>WS 网关</b> + 会话管理</li>
+          <li><b>前端 App</b>（采音/播音/立绘/字幕）</li>
+          <li>远程访问的 <b>TLS + 鉴权</b></li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <span class="sec-num">07</span>
+      <h2>三块硬骨头</h2>
+      <span class="sec-sub">务必先知道</span>
+    </div>
+    <div class="constraints">
+      <div class="con crit">
+        <div class="stripe"></div>
+        <div class="body">
+          <div class="c-h"><span class="sev">阻塞级</span><span class="c-t">手机 / 局域网访问必须 HTTPS</span></div>
+          <p class="c-d">浏览器麦克风权限 <code>getUserMedia</code> 只在 <code>localhost</code> 或 <code>https</code> 下可用。非本机访问要么自签证书（有警告），要么用 <b>Tailscale / Cloudflare Tunnel</b> 上真 TLS（顺带解决远程）。</p>
+        </div>
+      </div>
+      <div class="con warn">
+        <div class="stripe"></div>
+        <div class="body">
+          <div class="c-h"><span class="sev">需处理</span><span class="c-t">WSL2 网络暴露</span></div>
+          <p class="c-d">服务在 WSL 里，局域网设备访问需在 Windows 上做 <code>netsh portproxy</code> 端口转发，或把 WS 网关直接跑在 Windows 侧。</p>
+        </div>
+      </div>
+      <div class="con warn">
+        <div class="stripe"></div>
+        <div class="body">
+          <div class="c-h"><span class="sev">需处理</span><span class="c-t">并发受限于单卡</span></div>
+          <p class="c-d">一张 5090，LLM/TTS 一次只能顺序处理一路。<b>自己单人用没问题</b>；多人同时用要加请求队列 + 每会话上下文，且会排队。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <span class="sec-num">08</span>
+      <h2>分阶段实施</h2>
+      <span class="sec-sub">若真要做</span>
+    </div>
+    <div class="phases">
+      <div class="phase p1">
+        <div class="p-tag">P1 · MVP</div>
+        <div class="p-scope">仅本机 localhost</div>
+        <h3>浏览器里完整对话</h3>
+        <ul>
+          <li>WS 网关 + 单页 App</li>
+          <li>采音 / 播音 / Live2D / 字幕 / 切换</li>
+          <li>管线跑 socket 模式</li>
+        </ul>
+        <div class="eta">工作量大头 · 但模型侧全复用、甩掉 WSL 音频坑</div>
+      </div>
+      <div class="phase">
+        <div class="p-tag">P2 · 联网</div>
+        <div class="p-scope">手机 / 外网可用</div>
+        <h3>上 TLS 与鉴权</h3>
+        <ul>
+          <li>Tailscale 或 Cloudflare Tunnel</li>
+          <li>简单口令鉴权</li>
+          <li>端口转发</li>
+        </ul>
+        <div class="eta">用 Tailscale 的话约半天能通</div>
+      </div>
+      <div class="phase">
+        <div class="p-tag">P3 · 打磨</div>
+        <div class="p-scope">接近产品级</div>
+        <h3>低延迟与多会话</h3>
+        <ul>
+          <li>客户端 VAD + 秒级打断</li>
+          <li>WebRTC（AEC / 低延迟）</li>
+          <li>移动端 UI · 多会话</li>
+        </ul>
+        <div class="eta">看要做到多细</div>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <b>状态</b> · 设计稿，未动手实现 &nbsp;|&nbsp; <b>建议起点</b> · P1 本机 MVP &nbsp;|&nbsp; <b>下一步</b> · 定方向后出细化到接口与文件改动的实施方案<br>
+    cyber girl · 本地语音 + Live2D · 网页版架构设计
+  </footer>
+</div>

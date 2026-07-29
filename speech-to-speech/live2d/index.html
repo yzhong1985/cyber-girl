@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>cyber girl · Live2D</title>
+<style>
+  html,body{margin:0;height:100%;background:#0b0b0f;overflow:hidden}
+  #canvas{display:block;width:100vw;height:100vh}
+  #hud{position:fixed;left:12px;top:10px;font:13px/1.5 system-ui,"Microsoft YaHei",sans-serif;
+       color:#8a8aa0;user-select:none}
+  #hud b{color:#9fc4ff}
+  .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#444;margin-right:6px;vertical-align:middle}
+  .dot.on{background:#4ad07a}
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<div id="hud"><span class="dot" id="dot"></span>cyber girl · <b id="who">Hiyori</b> <span id="st">连接中…</span></div>
+
+<script src="lib/live2dcubismcore.min.js"></script>
+<script src="lib/pixi.min.js"></script>
+<script src="lib/live2d.min.js"></script>
+<script>
+const { Live2DModel } = PIXI.live2d;
+
+const app = new PIXI.Application({
+  view: document.getElementById('canvas'),
+  autoStart: true,
+  resizeTo: window,
+  backgroundAlpha: 0,
+  antialias: true,
+});
+
+let targetMouth = 0;   // SSE 推来的目标口型 0..1
+let curMouth = 0;      // 平滑后的当前值
+
+(async () => {
+  Live2DModel.registerTicker(PIXI.Ticker);
+  const model = await Live2DModel.from('model/Hiyori/Hiyori.model3.json', { autoInteract: false });
+  app.stage.addChild(model);
+
+  function layout() {
+    const s = (window.innerHeight * 0.92) / model.internalModel.originalHeight;
+    model.scale.set(s);
+    model.anchor.set(0.5, 0.5);
+    model.position.set(window.innerWidth / 2, window.innerHeight / 2);
+  }
+  layout();
+  window.addEventListener('resize', layout);
+
+  // 在动作更新之后覆盖口型参数，实现"说话时嘴动"
+  model.internalModel.on('afterMotionUpdate', () => {
+    curMouth += (targetMouth - curMouth) * 0.45;   // 平滑
+    const core = model.internalModel.coreModel;
+    core.setParameterValueById('ParamMouthOpenY', curMouth);
+  });
+
+  // 随机点头/眨眼由模型自带 idle 动作负责；这里只管嘴
+  connectSSE();
+})().catch(err => {
+  document.getElementById('st').textContent = '模型加载失败: ' + err;
+  console.error(err);
+});
+
+function connectSSE() {
+  const st = document.getElementById('st'), dot = document.getElementById('dot');
+  const es = new EventSource('/mouth-stream');
+  es.onopen = () => { st.textContent = '已连接，等你说话'; dot.classList.add('on'); };
+  es.onerror = () => { st.textContent = '连接断开，重试中…'; dot.classList.remove('on'); };
+  es.onmessage = (e) => {
+    try { targetMouth = Math.max(0, Math.min(1, JSON.parse(e.data).mouth)); } catch {}
+  };
+}
+</script>
+</body>
+</html>

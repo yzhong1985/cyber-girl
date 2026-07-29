@@ -1,0 +1,37 @@
+# ===== Python 虚拟环境 =====
+.venv/
+ditto-talkinghead/.venv/
+__pycache__/
+*.pyc
+
+# ===== 模型权重 / 大体积第三方二进制(用户各自下载, 不进仓库) =====
+speech-to-speech/models/
+ditto-talkinghead/checkpoints/
+*.gguf
+*.onnx
+*.pth
+*.pt
+*.engine
+*.safetensors
+llama-win/*.dll
+llama-win/*.exe
+llama-win/*.zip
+
+# ===== 语音克隆样本 / 数字人照片(个人/肖像内容, 不进仓库) =====
+voice/
+speech-to-speech/voices/*.wav
+speech-to-speech/voices/*.mp3
+ditto-talkinghead/avatar/*.png
+ditto-talkinghead/avatar/*.jpg
+
+# ===== 运行期生成内容 =====
+ditto-talkinghead/avatar_out/
+ditto-talkinghead/tmp/
+speech-to-speech/tmp/
+_*.log
+_*.txt
+*.mp4
+*.wav
+
+# ===== 系统/编辑器杂项 =====
+.DS_Store
