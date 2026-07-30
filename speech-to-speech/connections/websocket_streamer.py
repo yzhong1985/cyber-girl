@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import json
+import ssl
 from queue import Empty
 
 logger = logging.getLogger(__name__)
@@ -24,6 +25,8 @@ class WebSocketStreamer:
         text_output_queue=None,
         host="0.0.0.0",
         port=8765,
+        tls_cert=None,
+        tls_key=None,
     ):
         self.stop_event = stop_event
         self.input_queue = input_queue  # clients -> VAD
@@ -32,6 +35,8 @@ class WebSocketStreamer:
         self.should_listen = should_listen
         self.host = host
         self.port = port
+        self.tls_cert = tls_cert
+        self.tls_key = tls_key
         self.clients = set()
         self.loop = None
         self.server = None
@@ -52,12 +57,20 @@ class WebSocketStreamer:
         """Main async server loop."""
         import websockets
 
-        logger.info(f"WebSocket server starting on ws://{self.host}:{self.port}")
+        ssl_context = None
+        scheme = "ws"
+        if self.tls_cert and self.tls_key:
+            ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            ssl_context.load_cert_chain(self.tls_cert, self.tls_key)
+            scheme = "wss"
+
+        logger.info(f"WebSocket server starting on {scheme}://{self.host}:{self.port}")
 
         self.server = await websockets.serve(
             self._handle_client,
             self.host,
             self.port,
+            ssl=ssl_context,
         )
 
         logger.info("WebSocket server ready, waiting for connections...")

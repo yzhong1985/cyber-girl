@@ -7,17 +7,20 @@
 #   bash start_avatar.sh              按 config.env(默认抠图开: 合成到背景, 好看但慢)
 #   bash start_avatar.sh --skip-mask  强制关抠图: 照片原背景, 每句快 ~40%(约省 2s+)
 #   bash start_avatar.sh --matte      强制开抠图
+#   bash start_avatar.sh --web        网页版: 浏览器采麦(WebSocket), 自签HTTPS供局域网访问
 # ========================================================================
 set -e
 ROOT=/mnt/e/Projects/cyberGirl
 
-# ---- 命令行参数(优先级高于 config.env): --skip-mask 关抠图 ----
+# ---- 命令行参数(优先级高于 config.env): --skip-mask 关抠图, --web 开网页版 ----
 MATTE_CLI=""   # 空=听配置; on/off=命令行强制
+WEB_CLI=""     # 空=听配置; on=命令行强制开网页版
 for arg in "$@"; do
   case "$arg" in
     --skip-mask|--no-matte|--no-mask) MATTE_CLI="off" ;;
     --mask|--matte)                   MATTE_CLI="on" ;;
-    *) echo "未知参数: $arg (可用: --skip-mask / --matte)"; exit 1 ;;
+    --web)                            WEB_CLI="on" ;;
+    *) echo "未知参数: $arg (可用: --skip-mask / --matte / --web)"; exit 1 ;;
   esac
 done
 
@@ -37,6 +40,37 @@ done
 : "${LLM_MODEL:=qwen3-14b-q6}"
 : "${LLM_GGUF:=E:\\Projects\\cyberGirl\\speech-to-speech\\models\\llm\\Qwen3-14B-Q6_K.gguf}"
 : "${LLM_CTX:=8192}"
+: "${WEB_MODE:=0}"
+: "${WS_PORT:=8765}"
+
+# 网页版最终决定: 命令行 > config.env
+WEB=0
+if [ "$WEB_CLI" = "on" ] || { [ -z "$WEB_CLI" ] && [ "$WEB_MODE" = "1" ]; }; then
+  WEB=1
+fi
+
+# ---- 网页版: 首次用自签证书(证书不存在才生成; 换了局域网/IP变了要手动删掉 certs/ 重生成) ----
+TLS_CERT=""; TLS_KEY=""; TLS_FLAG_AVATAR=""; TLS_FLAG_WS=""; LAN_IPS=""
+if [ "$WEB" = "1" ]; then
+  mkdir -p "$ROOT/certs"
+  TLS_CERT="$ROOT/certs/dev.crt"; TLS_KEY="$ROOT/certs/dev.key"
+  # 尽力探测 Windows 侧的局域网 IP(局域网设备连的是 Windows, 不是 WSL 内部 IP); 探测失败不影响启动
+  LAN_IPS=$(/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -Command \
+    "(Get-NetIPAddress -AddressFamily IPv4 | Where-Object {\$_.InterfaceAlias -notmatch 'Loopback|vEthernet|WSL' -and \$_.IPAddress -notmatch '^169\.254\.'}).IPAddress" \
+    2>/dev/null | tr -d '\r') || true
+  if [ ! -f "$TLS_CERT" ] || [ ! -f "$TLS_KEY" ]; then
+    echo "→ 首次生成自签 HTTPS 证书(证书不含私密信息, 只是让浏览器认为连接加密)..."
+    SAN="DNS:localhost,IP:127.0.0.1"
+    for ip in $LAN_IPS; do SAN="$SAN,IP:$ip"; done
+    openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
+      -keyout "$TLS_KEY" -out "$TLS_CERT" \
+      -subj "/CN=cybergirl.local" -addext "subjectAltName=$SAN" >/dev/null 2>&1
+    echo "  ✓ 证书已生成(覆盖: $SAN)"
+    echo "  (若之后局域网 IP 变了, 证书不会自动更新: 删掉 $ROOT/certs/ 重新运行本脚本即可重新生成)"
+  fi
+  TLS_FLAG_AVATAR="--tls-cert $TLS_CERT --tls-key $TLS_KEY"
+  TLS_FLAG_WS="--ws_tls_cert $TLS_CERT --ws_tls_key $TLS_KEY"
+fi
 
 # 抠图最终决定: 命令行 > config.env
 MATTE_FLAG=""
@@ -67,8 +101,10 @@ fi
 
 # ---- 2) Ditto 形象服务(独立 py3.10 venv) ----
 # 注意: 抠图开/关、生成后端都是服务启动时定死的; 若服务已在运行, 改配置不生效(需先 stop.sh)
-if curl -s --max-time 3 http://127.0.0.1:8902/idle.png -o /dev/null 2>/dev/null; then
-  echo "✓ Ditto 形象服务已在运行(抠图/后端沿用上次启动; 想改需先 bash stop.sh)"
+SCHEME="http"; CURL_INSECURE=""
+[ "$WEB" = "1" ] && { SCHEME="https"; CURL_INSECURE="-k"; }
+if curl -s $CURL_INSECURE --max-time 3 "${SCHEME}://127.0.0.1:8902/idle.png" -o /dev/null 2>/dev/null; then
+  echo "✓ Ditto 形象服务已在运行(抠图/后端/网页版沿用上次启动; 想改需先 bash stop.sh)"
 else
   COMPILE_FLAG=""
   WAIT_HINT="约 30s"
@@ -94,25 +130,46 @@ else
   ( cd "$ROOT/ditto-talkinghead" \
     && export PULSE_SERVER=unix:/mnt/wslg/PulseServer \
     && nohup .venv/bin/python avatar_service.py --avatar "$AVATAR_PHOTO" --port 8902 \
-       --backend "$AVATAR_BACKEND" $MATTE_FLAG $COMPILE_FLAG \
+       --backend "$AVATAR_BACKEND" $MATTE_FLAG $COMPILE_FLAG $TLS_FLAG_AVATAR \
        > "$ROOT/_avatar_svc.log" 2>&1 & )
   echo -n "  等待形象服务就绪 "
   for i in $(seq 1 150); do
-    curl -s --max-time 3 http://127.0.0.1:8902/idle.png -o /dev/null 2>/dev/null && { echo " ✓"; break; }
+    curl -s $CURL_INSECURE --max-time 3 "${SCHEME}://127.0.0.1:8902/idle.png" -o /dev/null 2>/dev/null && { echo " ✓"; break; }
     echo -n "."; sleep 2
   done
 fi
 
-# ---- 3) 语音管线(avatar 模式: TTS 音频发给 Ditto, 不本地播放) ----
+# ---- 3) 语音管线 ----
+# 本机模式: --mode local(用本机麦克风/WSLg音频); 网页版: --mode websocket(浏览器采麦, 端口8765)
+# 两种模式下 TTS 音频都直接 POST 给 Ditto, 不走管线自己的音频输出
 cd "$ROOT/speech-to-speech"
 source "$ROOT/.venv/bin/activate"
 export PULSE_SERVER=unix:/mnt/wslg/PulseServer
-export DITTO_AVATAR_URL="http://127.0.0.1:8902/generate"
+export DITTO_AVATAR_URL="${SCHEME}://127.0.0.1:8902/generate"
 PERSONA_PROMPT=$(python -c "import json,sys;print(json.load(open('characters.json'))[sys.argv[1]]['system_prompt'])" "$PERSONA")
-echo "→ 启动语音管线(avatar模式, 角色=$PERSONA, STT语言=$STT_LANGUAGE)"
-echo "  浏览器打开 http://127.0.0.1:8902/ 点「进入」, 然后对麦克风说话"
+MODE_FLAG="--mode local"
+if [ "$WEB" = "1" ]; then
+  MODE_FLAG="--mode websocket --ws_host 0.0.0.0 --ws_port $WS_PORT $TLS_FLAG_WS"
+fi
+echo "→ 启动语音管线(角色=$PERSONA, STT语言=$STT_LANGUAGE, 网页版=$([ "$WEB" = "1" ] && echo 开 || echo 关))"
+if [ "$WEB" = "1" ]; then
+  LAN_IP=$(echo "$LAN_IPS" | head -1)
+  echo "  本机浏览器打开 https://127.0.0.1:8902/ 点「进入」(会弹证书不受信任警告, 选择继续前往)"
+  if [ -n "$LAN_IP" ]; then
+    echo "  局域网设备(还需下面两步, 只用做一次):"
+    echo "   1. Windows 管理员 PowerShell 执行端口转发+防火墙放行(WSL IP 重启会变, 每次重启WSL都要重新执行):"
+    WSL_IP=$(hostname -I | awk '{print $1}')
+    echo "      netsh interface portproxy add v4tov4 listenport=8902 listenaddress=0.0.0.0 connectport=8902 connectaddress=$WSL_IP"
+    echo "      netsh interface portproxy add v4tov4 listenport=$WS_PORT listenaddress=0.0.0.0 connectport=$WS_PORT connectaddress=$WSL_IP"
+    echo "      netsh advfirewall firewall add rule name=cybergirl-web dir=in action=allow protocol=TCP localport=8902,$WS_PORT"
+    echo "   2. 其它设备浏览器先打开 https://${LAN_IP}:${WS_PORT}/ 点「继续前往」信任证书(WS连接本身无法弹这个提示, 必须先单独访问一次)"
+    echo "   3. 再打开 https://${LAN_IP}:8902/ 点「进入」, 同样先信任证书, 然后允许麦克风权限"
+  fi
+else
+  echo "  浏览器打开 http://127.0.0.1:8902/ 点「进入」, 然后对麦克风说话"
+fi
 exec python s2s_pipeline.py \
-  --mode local \
+  $MODE_FLAG \
   --stt whisper --stt_model_name "$STT_MODEL" --language "$STT_LANGUAGE" \
   --llm open_api \
   --open_api_base_url "http://${LLM_HOST}:8080/v1" \

@@ -299,6 +299,8 @@ def build_pipeline(
             text_output_queue=text_output_queue,
             host=websocket_streamer_kwargs.ws_host,
             port=websocket_streamer_kwargs.ws_port,
+            tls_cert=websocket_streamer_kwargs.ws_tls_cert,
+            tls_key=websocket_streamer_kwargs.ws_tls_key,
         )
         comms_handlers = [websocket_streamer]
     else:

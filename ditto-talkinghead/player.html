@@ -19,6 +19,9 @@
  #vid{display:none}
  #hud{position:fixed;left:12px;top:10px;color:#8a8aa0;font-size:13px;z-index:3}
  #hud b{color:#9fc4ff}
+ #mic{color:#6a6a80;margin-top:2px}
+ #cap{position:fixed;left:0;right:0;bottom:22px;text-align:center;color:#d8d8e6;
+   font-size:15px;z-index:3;padding:0 16px;text-shadow:0 1px 3px #000}
  #gate{position:fixed;inset:0;background:#0b0b0fcc;display:flex;align-items:center;justify-content:center;
    cursor:pointer;z-index:4}
  #gate div{color:#e8e8ef;font-size:18px;padding:14px 26px;border:1px solid #33334a;border-radius:12px;background:#16161f}
@@ -27,16 +30,18 @@
   <video id=idle class=avatar src="/video/idle_loop.mp4" loop muted autoplay playsinline></video>
   <video id=vid class=avatar playsinline></video>
 </div>
-<div id=hud>cyber girl · <b id=st>待命</b></div>
-<div id=gate><div>▶ 点击进入</div></div>
+<div id=hud>cyber girl · <b id=st>待命</b><div id=mic></div></div>
+<div id=cap></div>
+<div id=gate><div>▶ 点击进入(会请求麦克风权限)</div></div>
 <script>
  const idle=document.getElementById('idle'), vid=document.getElementById('vid'),
-       st=document.getElementById('st'), gate=document.getElementById('gate');
+       st=document.getElementById('st'), gate=document.getElementById('gate'),
+       micEl=document.getElementById('mic'), capEl=document.getElementById('cap');
  const q=[]; let playing=false, ready=false;
  const IDLE_RATE=0.2;                 // 待命头部动作速度(1=原速, 越小越慢越稳)
  idle.playbackRate=IDLE_RATE;
  idle.play().catch(()=>{});
- gate.onclick=()=>{ready=true; gate.style.display='none'; idle.play().catch(()=>{}); pump();};
+ gate.onclick=()=>{ready=true; gate.style.display='none'; idle.play().catch(()=>{}); pump(); startMic();};
  function showIdle(){
    vid.style.display='none'; vid.pause();
    idle.style.display='block'; idle.playbackRate=IDLE_RATE; idle.play().catch(()=>{}); st.textContent='待命';
@@ -53,4 +58,75 @@
  vid.onerror=()=>{playing=false; showIdle(); pump();};
  const es=new EventSource('/events');
  es.onmessage=e=>{try{const d=JSON.parse(e.data); if(d.video){q.push(d.video); pump();}}catch(_){}};
+
+ // ---- 网页版: 浏览器采麦, 经 WebSocket 发给语音管线(端口约定 8765) ----
+ const WS_PORT = 8765;
+ const WORKLET_SRC = `
+   class PCMWorklet extends AudioWorkletProcessor {
+     constructor(){ super(); this._chunks=[]; this._len=0; }
+     process(inputs){
+       const ch = inputs[0] && inputs[0][0];
+       if(ch && ch.length){
+         this._chunks.push(ch.slice());
+         this._len += ch.length;
+         if(this._len >= 512){
+           const merged = new Float32Array(this._len);
+           let off=0;
+           for(const c of this._chunks){ merged.set(c, off); off+=c.length; }
+           const nFrames = Math.floor(this._len/512)*512;
+           const send = merged.subarray(0, nFrames);
+           const rest = merged.subarray(nFrames);
+           const pcm16 = new Int16Array(send.length);
+           for(let i=0;i<send.length;i++){
+             const s = Math.max(-1, Math.min(1, send[i]));
+             pcm16[i] = s<0 ? s*32768 : s*32767;
+           }
+           this.port.postMessage(pcm16.buffer, [pcm16.buffer]);
+           this._chunks = rest.length ? [rest] : [];
+           this._len = rest.length;
+         }
+       }
+       return true;
+     }
+   }
+   registerProcessor('pcm-worklet', PCMWorklet);
+ `;
+
+ async function startMic(){
+   let ws;
+   try{
+     const wsProto = location.protocol === 'https:' ? 'wss' : 'ws';
+     ws = new WebSocket(`${wsProto}://${location.hostname}:${WS_PORT}`);
+     ws.binaryType = 'arraybuffer';
+   }catch(e){
+     micEl.textContent = '麦克风连接失败(WS)'; return;
+   }
+   ws.onopen = ()=>{ micEl.textContent = '聆听中'; };
+   ws.onclose = ()=>{ micEl.textContent = '连接已断开(刷新页面重连)'; };
+   ws.onerror = ()=>{ micEl.textContent = '连接出错(证书未信任? 见部署说明)'; };
+   ws.onmessage = (e)=>{
+     if(typeof e.data !== 'string') return;   // 二进制音频帧: avatar模式不用, 忽略
+     try{
+       const d = JSON.parse(e.data);
+       if(d.type === 'assistant_text' && d.text){ capEl.textContent = d.text; }
+     }catch(_){}
+   };
+
+   let stream;
+   try{
+     stream = await navigator.mediaDevices.getUserMedia({
+       audio:{channelCount:1, echoCancellation:true, noiseSuppression:true, autoGainControl:true}
+     });
+   }catch(e){
+     micEl.textContent = '麦克风未授权(点地址栏图标允许)'; return;
+   }
+
+   const audioCtx = new (window.AudioContext||window.webkitAudioContext)({sampleRate:16000});
+   const blobURL = URL.createObjectURL(new Blob([WORKLET_SRC], {type:'application/javascript'}));
+   await audioCtx.audioWorklet.addModule(blobURL);
+   const src = audioCtx.createMediaStreamSource(stream);
+   const node = new AudioWorkletNode(audioCtx, 'pcm-worklet');
+   node.port.onmessage = (e)=>{ if(ws.readyState === WebSocket.OPEN) ws.send(e.data); };
+   src.connect(node);
+ }
 </script></body></html>

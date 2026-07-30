@@ -11,7 +11,7 @@ avatar_service.py  ——  Ditto 真人形象服务 (跑在 Ditto 的 py3.10 ven
 用法: python avatar_service.py --avatar ./avatar/girl.png --port 8902
      python avatar_service.py --backend pytorch   # 需要对比/排障时退回全PyTorch
 """
-import argparse, io, json, math, os, threading, time, wave, subprocess
+import argparse, io, json, math, os, ssl, threading, time, wave, subprocess
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -35,6 +35,10 @@ DATA_ROOT = "./checkpoints/ditto_pytorch"
 GEN_KWARGS = dict(max_size=768, sampling_timesteps=50, smo_k_d=5)
 
 OUT_DIR = Path("./avatar_out"); OUT_DIR.mkdir(exist_ok=True)
+# 每句生成的 seg_*(wav/mp4/临时mp4) 从不自动删, 长期挂着会让这个目录无限增长。
+# 待命循环(_idle_*/idle_loop.mp4)每次启动固定文件名覆盖写, 不受这套清理影响。
+SEGMENT_MAX_AGE_S = 900   # 生成超过15分钟的段清掉(留够时间给SSE重连/慢速播放)
+CLEANUP_INTERVAL_S = 300
 
 _sdk = None
 _rvm = None            # RobustVideoMatting: 抠人像做透明背景
@@ -153,9 +157,33 @@ _videos = []                       # 已生成的视频 url 列表(供 SSE 顺�
 _cond = threading.Condition()
 
 
+def _cleanup_segments(max_age_s=None):
+    """删掉 avatar_out/ 里的 seg_* 生成文件; max_age_s=None 表示不管新旧全删
+    (进程刚启动时用, 上一次运行留下的段这次的 _videos/SSE 都不会再引用了)。"""
+    now = time.time()
+    n = 0
+    for fp in OUT_DIR.glob("seg_*"):
+        try:
+            if max_age_s is None or (now - fp.stat().st_mtime) > max_age_s:
+                fp.unlink()
+                n += 1
+        except OSError:
+            pass
+    if n:
+        print(f"[avatar] 清理了 {n} 个生成文件", flush=True)
+
+
+def _cleanup_loop():
+    while True:
+        time.sleep(CLEANUP_INTERVAL_S)
+        _cleanup_segments(max_age_s=SEGMENT_MAX_AGE_S)
+
+
 def load_sdk(avatar_path):
     global _sdk, _avatar
     _avatar = avatar_path
+    _cleanup_segments()   # 清掉上一次运行留下的旧段, avatar_out/ 不会无限增长
+    threading.Thread(target=_cleanup_loop, daemon=True).start()
     print(f"[avatar] 加载 SDK ...", flush=True)
     _sdk = StreamSDK(CFG_PKL, DATA_ROOT)
     # 人脸注册缓存: 同一照片只注册一次, 后续每句省 ~1s
@@ -294,7 +322,7 @@ PAGE = """<!doctype html><html lang=zh><head><meta charset=utf-8>
 </script></body></html>"""
 
 
-def serve(port, avatar_path):
+def serve(port, avatar_path, tls_cert=None, tls_key=None):
     load_sdk(avatar_path)
 
     class H(BaseHTTPRequestHandler):
@@ -360,7 +388,13 @@ def serve(port, avatar_path):
 
     srv = ThreadingHTTPServer(("0.0.0.0", port), H)
     srv.daemon_threads = True
-    print(f"[avatar] 形象播放页: http://127.0.0.1:{port}/", flush=True)
+    scheme = "http"
+    if tls_cert and tls_key:
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.load_cert_chain(tls_cert, tls_key)
+        srv.socket = ctx.wrap_socket(srv.socket, server_side=True)
+        scheme = "https"
+    print(f"[avatar] 形象播放页: {scheme}://127.0.0.1:{port}/", flush=True)
     srv.serve_forever()
 
 
@@ -380,6 +414,8 @@ if __name__ == "__main__":
     ap.add_argument("--no-compile-lmdm", dest="compile_lmdm", action="store_false",
                     help="关闭 lmdm(audio2motion) 的 torch.compile 加速(排障用)")
     ap.set_defaults(compile_lmdm=None)
+    ap.add_argument("--tls-cert", default=None, help="TLS 证书路径; 和 --tls-key 一起给才开 HTTPS(网页版局域网访问需要)")
+    ap.add_argument("--tls-key", default=None, help="TLS 私钥路径")
     args = ap.parse_args()
     # 抠图开关: 命令行 --no-matte 优先; 否则看环境变量 AVATAR_MATTE(0/false 关); 默认开
     if args.matte is None:
@@ -415,4 +451,4 @@ if __name__ == "__main__":
         print(f"[avatar] 背景图: {bg_path}", flush=True)
     else:
         print("[avatar] 背景: 暗色渐变(默认)", flush=True)
-    serve(args.port, args.avatar)
+    serve(args.port, args.avatar, tls_cert=args.tls_cert, tls_key=args.tls_key)

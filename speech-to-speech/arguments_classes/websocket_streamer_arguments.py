@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+from typing import Optional
 
 
 @dataclass
@@ -15,4 +16,15 @@ class WebSocketStreamerArguments:
         metadata={
             "help": "The port number on which the WebSocket server listens. Default is 8765."
         },
+    )
+    ws_tls_cert: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "TLS certificate path; giving this together with ws_tls_key serves WSS instead of WS "
+            "(needed for browser mic access from non-localhost origins)."
+        },
+    )
+    ws_tls_key: Optional[str] = field(
+        default=None,
+        metadata={"help": "TLS private key path."},
     )

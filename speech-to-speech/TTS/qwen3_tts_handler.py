@@ -16,6 +16,7 @@ import logging
 import math
 import os
 import re
+import ssl
 import time
 import unicodedata
 import urllib.request
@@ -250,7 +251,14 @@ class Qwen3TTSHandler(BaseHandler):
             req = urllib.request.Request(
                 self.avatar_url, data=audio.tobytes(), method="POST",
                 headers={"Content-Type": "application/octet-stream"})
-            urllib.request.urlopen(req, timeout=180).read()   # 阻塞：生成完成
+            # 网页版下 avatar_url 是 https://127.0.0.1:8902(本机自签证书, 给浏览器用的),
+            # 这里是同机后端到后端的调用, 不校验证书(不是暴露在外网的连接)
+            ctx = None
+            if self.avatar_url.startswith("https://"):
+                ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+                ctx.check_hostname = False
+                ctx.verify_mode = ssl.CERT_NONE
+            urllib.request.urlopen(req, timeout=180, context=ctx).read()   # 阻塞：生成完成
         except Exception as e:
             logger.error(f"[TTS] 发送到形象服务失败: {e}")
             self.should_listen.set()
