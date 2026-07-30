@@ -149,5 +149,12 @@
    const node = new AudioWorkletNode(audioCtx, 'pcm-worklet');
    node.port.onmessage = (e)=>{ if(ws.readyState === WebSocket.OPEN) ws.send(e.data); };
    src.connect(node);
+   // AudioWorkletNode 必须连到 destination 所在的图里, process() 才会被浏览器持续调用
+   // (没连到输出的"悬空"节点很多实现里根本不会拉动处理); 接一个增益0的节点静音,
+   // 避免麦克风声音被回放出来(回声/啸叫)。
+   const mute = audioCtx.createGain();
+   mute.gain.value = 0;
+   node.connect(mute);
+   mute.connect(audioCtx.destination);
  }
 </script></body></html>
