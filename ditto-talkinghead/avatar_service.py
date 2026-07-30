@@ -46,6 +46,11 @@ _gen_lock = threading.Lock()
 # (15.0→19.5fps), 换算相对纯PyTorch基线 +56%。代价: 进程内首次调用编译耗时 ~70s,
 # 由启动时的待命循环生成(_build_idle_loop)顺带吸收, 用户感知不到。
 _compile_warp = True   # 命令行 --no-compile-warp 或环境变量 AVATAR_COMPILE_WARP=0 可关闭
+# lmdm(audio2motion扩散模型)编译加速: 同样套 torch.compile, 但用 default 模式(不开
+# CUDA Graph) —— reduce-overhead 模式下会跟 rotary embedding 内部张量缓存冲突崩溃,
+# 报 "CUDAGraphs 输出被后续运行覆写"。实测(2026-07-30): 在 warp 已编译基础上(19.8fps)
+# 再跳到 31.9fps(+61%), 相对纯PyTorch基线(12.5fps) +155%。
+_compile_lmdm = True   # 命令行 --no-compile-lmdm 或环境变量 AVATAR_COMPILE_LMDM=0 可关闭
 # 抠图开关: True=抠像并合成到背景(慢, 好看); False=直接用照片原背景(快, 省 ~1×音频时长)
 # 命令行 --no-matte 或环境变量 AVATAR_MATTE=0 可关闭
 _matte = True
@@ -158,6 +163,14 @@ def load_sdk(avatar_path):
     if _compile_warp:
         print(f"[avatar] warp_network 编译加速(torch.compile, 首次调用较慢, 由下面的待命循环预热吸收)...", flush=True)
         _sdk.warp_f3d.warp_net.model = torch.compile(_sdk.warp_f3d.warp_net.model, mode="reduce-overhead")
+    if _compile_lmdm and _sdk.audio2motion.lmdm.model_type == "pytorch":
+        # lmdm(audio2motion扩散模型)每句要跑 sampling_timesteps(=50) 步, 每步内部
+        # guided_forward 调 2 次 MotionDecoder.forward(CFG), 逐帧 eager 开销明显。
+        # 用 default 模式(不开 CUDA Graph): reduce-overhead 会跟 rotary embedding
+        # 内部张量缓存冲突崩溃("CUDAGraphs 输出被后续运行覆写"), default 没有该问题。
+        print(f"[avatar] lmdm 编译加速(torch.compile, 首次调用较慢, 由下面的待命循环预热吸收)...", flush=True)
+        motion_decoder = _sdk.audio2motion.lmdm.model.model
+        motion_decoder.forward = torch.compile(motion_decoder.forward, mode="default")
     global _rvm
     if _matte:
         print(f"[avatar] 加载 RVM 抠像模型 ...", flush=True)
@@ -364,6 +377,9 @@ if __name__ == "__main__":
     ap.add_argument("--no-compile-warp", dest="compile_warp", action="store_false",
                     help="关闭 warp_network 的 torch.compile 加速(排障用)")
     ap.set_defaults(compile_warp=None)
+    ap.add_argument("--no-compile-lmdm", dest="compile_lmdm", action="store_false",
+                    help="关闭 lmdm(audio2motion) 的 torch.compile 加速(排障用)")
+    ap.set_defaults(compile_lmdm=None)
     args = ap.parse_args()
     # 抠图开关: 命令行 --no-matte 优先; 否则看环境变量 AVATAR_MATTE(0/false 关); 默认开
     if args.matte is None:
@@ -382,6 +398,12 @@ if __name__ == "__main__":
     else:
         _compile_warp = args.compile_warp
     print(f"[avatar] warp_network torch.compile: {'开(+约30%, 首次约70s由预热吸收)' if _compile_warp else '关'}", flush=True)
+    # lmdm 编译加速: 命令行 --no-compile-lmdm 优先; 否则看环境变量 AVATAR_COMPILE_LMDM; 默认开
+    if args.compile_lmdm is None:
+        _compile_lmdm = os.environ.get("AVATAR_COMPILE_LMDM", "1").lower() not in ("0", "false", "no", "off")
+    else:
+        _compile_lmdm = args.compile_lmdm
+    print(f"[avatar] lmdm torch.compile: {'开(首次由预热吸收)' if _compile_lmdm else '关'}", flush=True)
     # 背景: 命令行 --bg 优先, 否则自动找 avatar/background.*, 都没有就用渐变
     bg_path = args.bg
     if not bg_path:

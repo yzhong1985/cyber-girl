@@ -28,6 +28,7 @@ done
 : "${AVATAR_MATTE:=1}"
 : "${AVATAR_BACKEND:=onnx}"
 : "${AVATAR_COMPILE_WARP:=1}"
+: "${AVATAR_COMPILE_LMDM:=1}"
 : "${STT_MODEL:=openai/whisper-large-v3-turbo}"
 : "${STT_LANGUAGE:=zh}"
 : "${VAD_THRESH:=0.4}"
@@ -71,10 +72,19 @@ if curl -s --max-time 3 http://127.0.0.1:8902/idle.png -o /dev/null 2>/dev/null;
 else
   COMPILE_FLAG=""
   WAIT_HINT="约 30s"
+  COMPILE_HINT=""
   if [ "$AVATAR_COMPILE_WARP" = "0" ]; then
-    COMPILE_FLAG="--no-compile-warp"
+    COMPILE_FLAG="$COMPILE_FLAG --no-compile-warp"
   else
-    WAIT_HINT="约 100s(含 warp_network 编译预热)"
+    COMPILE_HINT="warp_network"
+  fi
+  if [ "$AVATAR_COMPILE_LMDM" = "0" ]; then
+    COMPILE_FLAG="$COMPILE_FLAG --no-compile-lmdm"
+  else
+    COMPILE_HINT="${COMPILE_HINT:+$COMPILE_HINT+}lmdm"
+  fi
+  if [ -n "$COMPILE_HINT" ]; then
+    WAIT_HINT="约 100s(含 ${COMPILE_HINT} 编译预热)"
   fi
   if [ -n "$MATTE_FLAG" ]; then
     echo "→ 启动 Ditto 形象服务(抠图关: 照片原背景, 更快; 后端=$AVATAR_BACKEND; 加载模型 $WAIT_HINT)..."

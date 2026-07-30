@@ -8,6 +8,9 @@ __pycache__/
 
 # Model weights
 checkpoints
+
+# 第三方源码克隆(实验用, 未采用进正式方案, 见 docs/进度日志.md 2026-07-30)
+third_party/
 **/*.pth
 **/*.onnx
 **/*.pt
