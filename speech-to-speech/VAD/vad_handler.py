@@ -1,4 +1,9 @@
+import os
+import ssl
 import time
+import urllib.request
+from threading import Thread
+
 import torchaudio
 from VAD.vad_iterator import VADIterator
 from baseHandler import BaseHandler
@@ -50,6 +55,12 @@ class VADHandler(BaseHandler):
         self.enable_realtime_transcription = enable_realtime_transcription
         self.realtime_processing_pause = realtime_processing_pause
         self.text_output_queue = text_output_queue
+        # avatar 模式下, 说完话立刻推一段预生成好的过渡语("让我想想哈")占位播放,
+        # 跟 TTS handler 的 avatar_mode 用同一个环境变量判断; 只是查一下现成的
+        # 池子(avatar_service.py 那边已经预生成好了), 不在这里做任何生成/合成。
+        avatar_url = os.environ.get("DITTO_AVATAR_URL")
+        self.filler_url = (avatar_url.rsplit("/generate", 1)[0] + "/play_filler") if avatar_url else None
+        self.filler_enabled = os.environ.get("AVATAR_FILLER", "1").lower() not in ("0", "false", "no", "off")
         self.model, _ = torch.hub.load("snakers4/silero-vad", "silero_vad")
         self.iterator = VADIterator(
             self.model,
@@ -151,6 +162,7 @@ class VADHandler(BaseHandler):
                 if self.text_output_queue:
                     self.text_output_queue.put({"type": "speech_stopped"})
                     logger.debug("Speech stopped - sent event")
+                self._trigger_filler()
                 if self.audio_enhancement:
                     array = self._apply_audio_enhancement(array)
                 # Yield with final flag
@@ -174,9 +186,31 @@ class VADHandler(BaseHandler):
                 if self.text_output_queue:
                     self.text_output_queue.put({"type": "speech_stopped"})
                     logger.debug("Speech stopped - sent event")
+                self._trigger_filler()
                 if self.audio_enhancement:
                     array = self._apply_audio_enhancement(array)
                 yield array
+
+    def _trigger_filler(self):
+        """说完话立刻叫 Ditto 推一段预生成好的过渡语占位播放, 跟正常的
+        STT→LLM→TTS→Ditto(在其它线程里)是真并行, 这里只是个近乎零耗时的
+        HTTP调用(池子里随机挑一个已生成好的视频塞进播放队列, 不现场生成)。
+        放子线程里 fire-and-forget, 绝不能因为这个调用卡住 VAD 自己的循环。"""
+        if not (self.filler_url and self.filler_enabled):
+            return
+
+        def _fire():
+            try:
+                ctx = None
+                if self.filler_url.startswith("https://"):
+                    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+                    ctx.check_hostname = False
+                    ctx.verify_mode = ssl.CERT_NONE
+                urllib.request.urlopen(self.filler_url, timeout=5, context=ctx).read()
+            except Exception as e:
+                logger.debug(f"[VAD] 过渡语触发失败(不致命): {e}")
+
+        Thread(target=_fire, daemon=True).start()
 
     def _apply_audio_enhancement(self, array):
         """Apply audio enhancement if enabled."""

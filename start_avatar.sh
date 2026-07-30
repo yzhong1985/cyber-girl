@@ -32,6 +32,7 @@ done
 : "${AVATAR_BACKEND:=onnx}"
 : "${AVATAR_COMPILE_WARP:=1}"
 : "${AVATAR_COMPILE_LMDM:=1}"
+: "${AVATAR_FILLER:=1}"
 : "${STT_MODEL:=openai/whisper-large-v3-turbo}"
 : "${STT_LANGUAGE:=zh}"
 : "${VAD_THRESH:=0.4}"
@@ -146,6 +147,7 @@ cd "$ROOT/speech-to-speech"
 source "$ROOT/.venv/bin/activate"
 export PULSE_SERVER=unix:/mnt/wslg/PulseServer
 export DITTO_AVATAR_URL="${SCHEME}://127.0.0.1:8902/generate"
+export AVATAR_FILLER="$AVATAR_FILLER"
 PERSONA_PROMPT=$(python -c "import json,sys;print(json.load(open('characters.json'))[sys.argv[1]]['system_prompt'])" "$PERSONA")
 MODE_FLAG="--mode local"
 if [ "$WEB" = "1" ]; then

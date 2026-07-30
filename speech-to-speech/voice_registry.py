@@ -44,6 +44,13 @@ class VoiceRegistry:
         with self.lock:
             return self.characters[self.active]["system_prompt"]
 
+    _DEFAULT_FILLERS = ["嗯，让我想想", "让我想想哈", "等一下"]
+
+    def current_fillers(self):
+        """回复前的过渡语候选(贴合角色语气); characters.json 没配就用通用兜底"""
+        with self.lock:
+            return self.characters[self.active].get("fillers") or list(self._DEFAULT_FILLERS)
+
     def current_model(self):
         """给 llama-swap 用的 model 名"""
         with self.lock:

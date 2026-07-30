@@ -20,7 +20,7 @@ import ssl
 import time
 import unicodedata
 import urllib.request
-from threading import Event
+from threading import Event, Thread
 
 import numpy as np
 import torch
@@ -68,6 +68,11 @@ class Qwen3TTSHandler(BaseHandler):
         # avatar 模式: 设了 DITTO_AVATAR_URL 就把音频发给 Ditto 形象服务, 不本地播放
         self.avatar_url = os.environ.get("DITTO_AVATAR_URL")
         self.avatar_mode = bool(self.avatar_url)
+        self.avatar_base = self.avatar_url.rsplit("/generate", 1)[0] if self.avatar_mode else None
+        # 铺垫语("让我想想哈"之类): 说完话到真正回复中间那段空白(~14s)太安静,
+        # 预生成好一小池过渡语视频, VAD一检测到说完话就立刻推一段占位, 真正的
+        # STT→LLM→TTS→Ditto 在后台并行跑。默认开, AVATAR_FILLER=0 可关。
+        self.filler_enabled = os.environ.get("AVATAR_FILLER", "1").lower() not in ("0", "false", "no", "off")
         if self.avatar_mode:
             logger.info(f"[TTS] avatar 模式已开: 音频→ {self.avatar_url}")
 
@@ -88,6 +93,15 @@ class Qwen3TTSHandler(BaseHandler):
 
         logger.info(f"Qwen3-TTS loaded (faster-qwen3-tts): {model_name} on {device}")
         self.warmup()
+
+        if self.avatar_mode and self.filler_enabled:
+            self._pregenerate_fillers()
+            if self.registry is not None:
+                # 切角色 = 换音色, 池子里旧音色的过渡语得重新合成; 放后台线程避免
+                # 卡住切换面板那个HTTP请求(重新生成要跑好几秒Ditto推理)。
+                self.registry.register_callback(
+                    lambda _name: Thread(target=self._pregenerate_fillers, daemon=True).start()
+                )
 
     def warmup(self):
         """先跑一发，把 CUDA kernel 和图编译的开销吃掉。
@@ -112,6 +126,13 @@ class Qwen3TTSHandler(BaseHandler):
         if self.registry is not None:
             return self.registry.current_ref_text()
         return self.ref_text
+
+    _DEFAULT_FILLERS = ["嗯，让我想想", "让我想想哈", "等一下"]
+
+    def _current_fillers(self):
+        if self.registry is not None:
+            return self.registry.current_fillers()
+        return list(self._DEFAULT_FILLERS)
 
     # 官方 _estimate_max_new_tokens 的移植：按文本长度动态估算生成上限，
     # 避免模型不收口时一路合成到固定上限（会得到一两分钟的废音频）。
@@ -243,6 +264,16 @@ class Qwen3TTSHandler(BaseHandler):
         # 说完了，把麦克风放回去 —— 漏掉这行 AI 说完一句就聋了
         self.should_listen.set()
 
+    def _avatar_ssl_ctx(self):
+        # 网页版下 avatar_url 是 https://127.0.0.1:8902(本机自签证书, 给浏览器用的),
+        # 这里是同机后端到后端的调用, 不校验证书(不是暴露在外网的连接)
+        if not self.avatar_url.startswith("https://"):
+            return None
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        return ctx
+
     def _send_to_avatar(self, audio: np.ndarray):
         """把整句音频(int16 16k)POST 给 Ditto 形象服务; 阻塞到视频生成完，
         再等约一个音频时长(浏览器播放期)才放回麦克风，避免边说边听。"""
@@ -251,14 +282,7 @@ class Qwen3TTSHandler(BaseHandler):
             req = urllib.request.Request(
                 self.avatar_url, data=audio.tobytes(), method="POST",
                 headers={"Content-Type": "application/octet-stream"})
-            # 网页版下 avatar_url 是 https://127.0.0.1:8902(本机自签证书, 给浏览器用的),
-            # 这里是同机后端到后端的调用, 不校验证书(不是暴露在外网的连接)
-            ctx = None
-            if self.avatar_url.startswith("https://"):
-                ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-                ctx.check_hostname = False
-                ctx.verify_mode = ssl.CERT_NONE
-            urllib.request.urlopen(req, timeout=180, context=ctx).read()   # 阻塞：生成完成
+            urllib.request.urlopen(req, timeout=180, context=self._avatar_ssl_ctx()).read()   # 阻塞：生成完成
         except Exception as e:
             logger.error(f"[TTS] 发送到形象服务失败: {e}")
             self.should_listen.set()
@@ -266,6 +290,32 @@ class Qwen3TTSHandler(BaseHandler):
         # 生成已耗时约 1.3×dur；再等 dur 让浏览器把这段视频播完
         time.sleep(dur)
         self.should_listen.set()
+
+    def _pregenerate_fillers(self):
+        """合成当前角色语气的过渡语("让我想想哈"之类), 逐个POST给Ditto预生成
+        视频缓存进池子; 首次在 setup() 里做一次, 切角色时(音色变了)重做一次。
+        纯优化项, 失败不影响主流程(顶多没有过渡语, 退回原来的静默等待)。"""
+        try:
+            reset_req = urllib.request.Request(f"{self.avatar_base}/reset_fillers", data=b"", method="POST")
+            urllib.request.urlopen(reset_req, timeout=10, context=self._avatar_ssl_ctx()).read()
+            phrases = self._current_fillers()
+            ok = 0
+            for i, phrase in enumerate(phrases):
+                try:
+                    wav, sr = self._synth(phrase)
+                    audio = self._to_16k_int16(wav, sr)
+                    if audio.size == 0:
+                        continue
+                    req = urllib.request.Request(
+                        f"{self.avatar_base}/generate_filler?index={i}", data=audio.tobytes(),
+                        method="POST", headers={"Content-Type": "application/octet-stream"})
+                    urllib.request.urlopen(req, timeout=60, context=self._avatar_ssl_ctx()).read()
+                    ok += 1
+                except Exception as e:
+                    logger.warning(f"[TTS] 过渡语预生成失败(第{i}条 {phrase!r}): {e}")
+            logger.info(f"[TTS] 过渡语预生成完成: {ok}/{len(phrases)}")
+        except Exception as e:
+            logger.warning(f"[TTS] 过渡语预生成整体失败(不致命, 退回无铺垫语): {e}")
 
     def cleanup(self):
         del self.model

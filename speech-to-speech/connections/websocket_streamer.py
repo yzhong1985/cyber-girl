@@ -137,9 +137,15 @@ class WebSocketStreamer:
         finally:
             self.clients.discard(websocket)
             logger.info(f"Client {client_id} disconnected (finally block)")
-
-            if len(self.clients) == 0:
-                self.input_queue.put(b"END")
+            # 注意: 这里故意不再往 input_queue 放 b"END"。BaseHandler.run() 收到
+            # b"END" 会直接 break 出循环、退出线程, 而且会把 b"END" 接力放进自己的
+            # queue_out, 顺着 VAD→STT→LLM→LMProcessor→TTS 一路传下去, 等于最后一个
+            # 客户端一断开, 整条管线的全部线程都被永久杀死, 只能重启整个进程才能
+            # 恢复——网页版是长期挂着服务多个客户端陆续连接/断开的场景(刷新页面、
+            # 切后台、wifi抖动都会触发断开), 不是"一个客户端从头到尾对应一次进程
+            # 生命周期"的批处理场景, 断线不该杀管线。should_listen 已经在下次有
+            # 客户端连接时(110-112行)重新 set()了, 不需要靠 END 这套机制来处理
+            # "没客户端时别处理音频"这件事。
 
     async def _send_loop(self):
         """Send audio and text from queues to all connected clients."""

@@ -3,6 +3,8 @@ avatar_service.py  ——  Ditto 真人形象服务 (跑在 Ditto 的 py3.10 ven
 
 · 启动时加载 StreamSDK。
 · POST /generate  : body = 原始 int16 PCM(16k, 单声道) → 用照片生成这句的说话视频(mp4) → 通知播放页。
+· POST /generate_filler?index=N : 预生成过渡语视频(缓存进池子, 不推播放, 见"铺垫语"设计)。
+· GET  /play_filler : 从过渡语池子随机挑一段推给播放页(不生成, 接近零延迟)。
 · GET  /          : 浏览器播放页(顺序播放视频段 + 身体摆动 + 空闲显示静态照片)。
 · GET  /video/<f> : 提供生成的 mp4。
 · GET  /events    : SSE, 有新视频段就推给播放页。
@@ -11,7 +13,7 @@ avatar_service.py  ——  Ditto 真人形象服务 (跑在 Ditto 的 py3.10 ven
 用法: python avatar_service.py --avatar ./avatar/girl.png --port 8902
      python avatar_service.py --backend pytorch   # 需要对比/排障时退回全PyTorch
 """
-import argparse, io, json, math, os, ssl, threading, time, wave, subprocess
+import argparse, io, json, math, os, random, ssl, threading, time, wave, subprocess
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -155,6 +157,8 @@ def _mux_audio(rgb_mp4: str, out_mp4: str, audio_wav: str = None):
 
 _videos = []                       # 已生成的视频 url 列表(供 SSE 顺序下发)
 _cond = threading.Condition()
+_filler_pool = {}                  # index -> 过渡语视频 url("让我想想哈"之类, 预生成好缓存的)
+_filler_lock = threading.Lock()
 
 
 def _cleanup_segments(max_age_s=None):
@@ -215,13 +219,8 @@ def _pcm16_to_f32(body: bytes) -> np.ndarray:
     return np.frombuffer(body, dtype=np.int16).astype(np.float32) / 32768.0
 
 
-def _generate(audio_f32: np.ndarray) -> str:
-    """生成一句的说话视频, 返回 mp4 的 url 路径"""
-    ts = int(time.time() * 1000)
-    raw = str(OUT_DIR / f"seg_{ts}_raw.mp4")
-    wav = str(OUT_DIR / f"seg_{ts}.wav")
-    out = str(OUT_DIR / f"seg_{ts}.mp4")
-
+def _render(audio_f32: np.ndarray, raw: str, wav: str, out: str):
+    """核心渲染: 音频 → 说话视频文件(不涉及命名/队列, 供 _generate/_generate_filler 共用)"""
     # 落一个 wav 供合流
     with wave.open(wav, "wb") as w:
         w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000)
@@ -240,9 +239,31 @@ def _generate(audio_f32: np.ndarray) -> str:
         else:
             # 快路径: 用照片原背景, 只合入音频(视频流 copy 不重编码)
             _mux_audio(tmp_v, out, audio_wav=wav)
+
+
+def _generate(audio_f32: np.ndarray) -> str:
+    """生成一句回复的说话视频, 直接推给播放页, 返回 mp4 的 url 路径"""
+    ts = int(time.time() * 1000)
+    raw = str(OUT_DIR / f"seg_{ts}_raw.mp4")
+    wav = str(OUT_DIR / f"seg_{ts}.wav")
+    out = str(OUT_DIR / f"seg_{ts}.mp4")
+    _render(audio_f32, raw, wav, out)
     url = f"/video/seg_{ts}.mp4"
     with _cond:
         _videos.append(url); _cond.notify_all()
+    return url
+
+
+def _generate_filler(audio_f32: np.ndarray, index: int) -> str:
+    """预生成一段过渡语("让我想想哈"之类)视频, 固定文件名(不会被 seg_* 的定期清理删掉),
+    存进池子等 /play_filler 挑, 不直接推播放页。"""
+    raw = str(OUT_DIR / f"filler_{index}_raw.mp4")
+    wav = str(OUT_DIR / f"filler_{index}.wav")
+    out = str(OUT_DIR / f"filler_{index}.mp4")
+    _render(audio_f32, raw, wav, out)
+    url = f"/video/filler_{index}.mp4"
+    with _filler_lock:
+        _filler_pool[index] = url
     return url
 
 
@@ -342,6 +363,16 @@ def serve(port, avatar_path, tls_cert=None, tls_key=None):
                 return self._bytes(200, "text/html; charset=utf-8", html)
             if path == "/idle.png":
                 return self._bytes(200, "image/png", Path(_avatar).read_bytes())
+            if path == "/play_filler":
+                with _filler_lock:
+                    pool = list(_filler_pool.values())
+                if not pool:
+                    return self._bytes(200, "application/json", b'{"skip":true}')
+                url = random.choice(pool)
+                with _cond:
+                    _videos.append(url); _cond.notify_all()
+                return self._bytes(200, "application/json",
+                                   json.dumps({"video": url}).encode())
             if path.startswith("/video/"):
                 fp = (OUT_DIR / Path(path).name).resolve()
                 if fp.is_file() and str(fp).startswith(str(OUT_DIR.resolve())):
@@ -370,7 +401,31 @@ def serve(port, avatar_path, tls_cert=None, tls_key=None):
             self.send_response(404); self.end_headers()
 
         def do_POST(self):
-            if self.path.split("?", 1)[0] != "/generate":
+            path = self.path.split("?", 1)[0]
+            if path == "/reset_fillers":
+                with _filler_lock:
+                    _filler_pool.clear()
+                return self._bytes(200, "application/json", b'{"ok":true}')
+            if path == "/generate_filler":
+                from urllib.parse import parse_qs, urlparse
+                qs = parse_qs(urlparse(self.path).query)
+                try:
+                    index = int(qs.get("index", ["0"])[0])
+                except ValueError:
+                    index = 0
+                n = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(n)
+                try:
+                    audio = _pcm16_to_f32(body)
+                    if audio.size < 1600:
+                        return self._bytes(200, "application/json", b'{"skip":true}')
+                    url = _generate_filler(audio, index)
+                    return self._bytes(200, "application/json",
+                                       json.dumps({"video": url}).encode())
+                except Exception as e:
+                    return self._bytes(500, "application/json",
+                                       json.dumps({"error": str(e)}).encode())
+            if path != "/generate":
                 self.send_response(404); self.end_headers(); return
             n = int(self.headers.get("Content-Length", 0))
             body = self.rfile.read(n)
