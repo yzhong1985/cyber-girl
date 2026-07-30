@@ -83,12 +83,13 @@ class OpenApiModelHandler(BaseHandler):
     def warmup(self):
         logger.info(f"Warming up {self.__class__.__name__}")
         start = time.time()
+        # 用真实角色的 system_prompt(而不是通用占位提示词)预热, 这样服务端(llama.cpp)
+        # 的 prompt 前缀缓存命中的就是正式对话真正会用到的前缀, 消除首轮对话额外的
+        # 冷启动 prefill 延迟(实测: 冷=~4~8s TTFT, 命中缓存=~0.1~0.3s)。不写回
+        # self.chat, 不污染正式对话历史。
         response = self.client.chat.completions.create(
             model=self.model_name,
-            messages=[
-                {"role": "system", "content": "You are a helpful assistant"},
-                {"role": "user", "content": "Hello"},
-            ],
+            messages=self.chat.to_list() + [{"role": self.user_role, "content": "你好"}],
             stream=self.stream
         )
         end = time.time()
