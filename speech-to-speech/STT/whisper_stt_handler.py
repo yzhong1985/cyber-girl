@@ -122,7 +122,14 @@ class WhisperSTTHandler(BaseHandler):
 
         input_features = self.prepare_model_inputs(spoken_prompt)
         pred_ids = self.model.generate(input_features, **self.gen_kwargs)
-        language_code = self.processor.tokenizer.decode(pred_ids[0, 1])[2:-2]  # remove "<|" and "|>"
+        # 极短/近静音的输入(VAD判定为"说话"但内容太少)有时只生成1个token, 没有
+        # 位置1的语言token, pred_ids[0,1] 会 IndexError 崩掉整个handler, 且崩溃后
+        # 没有产出会导致下游 should_listen 永远收不到重置信号("麦克风卡死")。
+        # 生成长度不够时直接退回上一次识别到的语言, 不再取那个不存在的token。
+        if pred_ids.shape[1] > 1:
+            language_code = self.processor.tokenizer.decode(pred_ids[0, 1])[2:-2]  # remove "<|" and "|>"
+        else:
+            language_code = self.last_language
 
         if language_code not in SUPPORTED_LANGUAGES:  # reprocess with the last language
             logger.warning("Whisper detected unsupported language: %s", language_code)
@@ -132,11 +139,14 @@ class WhisperSTTHandler(BaseHandler):
             pred_ids = self.model.generate(input_features, **gen_kwargs)
         else:
             self.last_language = language_code
-        
+
         pred_text = self.processor.batch_decode(
             pred_ids, skip_special_tokens=True, decode_with_timestamps=False
         )[0]
-        language_code = self.processor.tokenizer.decode(pred_ids[0, 1])[2:-2] # remove "<|" and "|>"
+        if pred_ids.shape[1] > 1:
+            language_code = self.processor.tokenizer.decode(pred_ids[0, 1])[2:-2] # remove "<|" and "|>"
+        else:
+            language_code = self.last_language
 
         logger.debug("finished whisper inference")
         console.print(f"[yellow]USER: {pred_text}")
