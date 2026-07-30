@@ -1,4 +1,5 @@
 import os
+import random
 import ssl
 import time
 import urllib.request
@@ -61,6 +62,10 @@ class VADHandler(BaseHandler):
         avatar_url = os.environ.get("DITTO_AVATAR_URL")
         self.filler_url = (avatar_url.rsplit("/generate", 1)[0] + "/play_filler") if avatar_url else None
         self.filler_enabled = os.environ.get("AVATAR_FILLER", "1").lower() not in ("0", "false", "no", "off")
+        # 触发延迟基本为0会显得像"你话音刚落她就抢答"，很假；模拟真人反应先"愣"一下
+        # 再接过渡语。范围随机避免每次都一模一样的节奏。
+        self.filler_delay_min = float(os.environ.get("AVATAR_FILLER_DELAY_MIN", "1.6"))
+        self.filler_delay_max = float(os.environ.get("AVATAR_FILLER_DELAY_MAX", "2.6"))
         self.model, _ = torch.hub.load("snakers4/silero-vad", "silero_vad")
         self.iterator = VADIterator(
             self.model,
@@ -192,14 +197,17 @@ class VADHandler(BaseHandler):
                 yield array
 
     def _trigger_filler(self):
-        """说完话立刻叫 Ditto 推一段预生成好的过渡语占位播放, 跟正常的
-        STT→LLM→TTS→Ditto(在其它线程里)是真并行, 这里只是个近乎零耗时的
-        HTTP调用(池子里随机挑一个已生成好的视频塞进播放队列, 不现场生成)。
-        放子线程里 fire-and-forget, 绝不能因为这个调用卡住 VAD 自己的循环。"""
+        """说完话过一小会儿(模拟人反应的停顿, 不是立刻接话)叫 Ditto 推一段预生成
+        好的过渡语占位播放, 跟正常的 STT→LLM→TTS→Ditto(在其它线程里)是真并行,
+        这个延迟只影响过渡语什么时候出现, 不影响真正回复的生成进度。放子线程里
+        fire-and-forget, 绝不能因为这个调用卡住 VAD 自己的循环。"""
         if not (self.filler_url and self.filler_enabled):
             return
 
+        delay = random.uniform(self.filler_delay_min, self.filler_delay_max)
+
         def _fire():
+            time.sleep(delay)
             try:
                 ctx = None
                 if self.filler_url.startswith("https://"):

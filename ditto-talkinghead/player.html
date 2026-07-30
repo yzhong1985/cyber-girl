@@ -113,25 +113,45 @@
    registerProcessor('pcm-worklet', PCMWorklet);
  `;
 
- async function startMic(){
-   let ws;
+ // 起服务时 Ditto 形象服务(8902,这个页面)比语音管线(8765, STT/LLM/TTS都要加载,
+ // 常常要多等一两分钟)先就绪——不这样处理的话人是能看到了但说话完全没反应,
+ // 会以为坏了。这里 WS 连不上/断开都自动重试, 用文字提示是不是还在启动。
+ let ws = null, wsRetryTimer = null;
+ const WS_RETRY_MS = 2500;
+
+ function connectWS(){
+   let sock;
    try{
      const wsProto = location.protocol === 'https:' ? 'wss' : 'ws';
-     ws = new WebSocket(`${wsProto}://${location.hostname}:${WS_PORT}`);
-     ws.binaryType = 'arraybuffer';
+     sock = new WebSocket(`${wsProto}://${location.hostname}:${WS_PORT}`);
+     sock.binaryType = 'arraybuffer';
    }catch(e){
-     micEl.textContent = '麦克风连接失败(WS)'; return;
+     micEl.textContent = '语音服务连接失败, 2.5s后重试…';
+     wsRetryTimer = setTimeout(connectWS, WS_RETRY_MS);
+     return;
    }
-   ws.onopen = ()=>{ micEl.textContent = '聆听中'; };
-   ws.onclose = ()=>{ micEl.textContent = '连接已断开(刷新页面重连)'; };
-   ws.onerror = ()=>{ micEl.textContent = '连接出错(证书未信任? 见部署说明)'; };
-   ws.onmessage = (e)=>{
+   let openedOnce = false;
+   sock.onopen = ()=>{ openedOnce = true; ws = sock; micEl.textContent = '聆听中'; };
+   sock.onclose = ()=>{
+     ws = null;
+     micEl.textContent = openedOnce
+       ? '连接已断开, 重连中…'
+       : '语音服务启动中(常需1~2分钟), 自动重试…';
+     wsRetryTimer = setTimeout(connectWS, WS_RETRY_MS);
+   };
+   sock.onerror = ()=>{ /* onclose 紧跟着会触发, 提示统一交给 onclose 处理 */ };
+   sock.onmessage = (e)=>{
      if(typeof e.data !== 'string') return;   // 二进制音频帧: avatar模式不用, 忽略
      try{
        const d = JSON.parse(e.data);
        if(d.type === 'assistant_text' && d.text){ capEl.textContent = d.text; }
      }catch(_){}
    };
+ }
+
+ async function startMic(){
+   micEl.textContent = '连接语音服务…';
+   connectWS();
 
    let stream;
    try{
@@ -147,7 +167,8 @@
    await audioCtx.audioWorklet.addModule(blobURL);
    const src = audioCtx.createMediaStreamSource(stream);
    const node = new AudioWorkletNode(audioCtx, 'pcm-worklet');
-   node.port.onmessage = (e)=>{ if(ws.readyState === WebSocket.OPEN) ws.send(e.data); };
+   // 引用的是外层可变的 ws 变量(不是某次连接的快照), 断线重连后自动跟着换新连接发送
+   node.port.onmessage = (e)=>{ if(ws && ws.readyState === WebSocket.OPEN) ws.send(e.data); };
    src.connect(node);
    // AudioWorkletNode 必须连到 destination 所在的图里, process() 才会被浏览器持续调用
    // (没连到输出的"悬空"节点很多实现里根本不会拉动处理); 接一个增益0的节点静音,

@@ -33,6 +33,8 @@ done
 : "${AVATAR_COMPILE_WARP:=1}"
 : "${AVATAR_COMPILE_LMDM:=1}"
 : "${AVATAR_FILLER:=1}"
+: "${AVATAR_FILLER_DELAY_MIN:=1.6}"
+: "${AVATAR_FILLER_DELAY_MAX:=2.6}"
 : "${STT_MODEL:=openai/whisper-large-v3-turbo}"
 : "${STT_LANGUAGE:=zh}"
 : "${VAD_THRESH:=0.4}"
@@ -148,6 +150,8 @@ source "$ROOT/.venv/bin/activate"
 export PULSE_SERVER=unix:/mnt/wslg/PulseServer
 export DITTO_AVATAR_URL="${SCHEME}://127.0.0.1:8902/generate"
 export AVATAR_FILLER="$AVATAR_FILLER"
+export AVATAR_FILLER_DELAY_MIN="$AVATAR_FILLER_DELAY_MIN"
+export AVATAR_FILLER_DELAY_MAX="$AVATAR_FILLER_DELAY_MAX"
 PERSONA_PROMPT=$(python -c "import json,sys;print(json.load(open('characters.json'))[sys.argv[1]]['system_prompt'])" "$PERSONA")
 MODE_FLAG="--mode local"
 if [ "$WEB" = "1" ]; then
