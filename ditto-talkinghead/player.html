@@ -63,11 +63,32 @@
  const WS_PORT = 8765;
  const WORKLET_SRC = `
    class PCMWorklet extends AudioWorkletProcessor {
-     constructor(){ super(); this._chunks=[]; this._len=0; }
+     constructor(){
+       super();
+       this._chunks=[]; this._len=0;
+       // sampleRate 是 AudioWorkletGlobalScope 全局, 即 AudioContext 实际运行的采样率。
+       // 请求 new AudioContext({sampleRate:16000}) 只是"提示", 部分浏览器(尤其 iOS
+       // Safari)会不认, 实际还是给原生48k/44.1k——这里统一按实际值重采样到16k,
+       // 不管浏览器听不听那个请求都能拿到服务端要的16kHz。
+       this._ratio = sampleRate / 16000;
+     }
+     _to16k(f32){
+       // process()给的 raw 缓冲区下次调用就会被复用/覆写, 这里必须返回拷贝
+       if(this._ratio === 1) return f32.slice();
+       const outLen = Math.max(1, Math.floor(f32.length / this._ratio));
+       const out = new Float32Array(outLen);
+       for(let i=0;i<outLen;i++){
+         const pos = i*this._ratio, i0 = Math.floor(pos), i1 = Math.min(i0+1, f32.length-1);
+         const frac = pos - i0;
+         out[i] = f32[i0]*(1-frac) + f32[i1]*frac;
+       }
+       return out;
+     }
      process(inputs){
-       const ch = inputs[0] && inputs[0][0];
-       if(ch && ch.length){
-         this._chunks.push(ch.slice());
+       const raw = inputs[0] && inputs[0][0];
+       if(raw && raw.length){
+         const ch = this._to16k(raw);
+         this._chunks.push(ch);
          this._len += ch.length;
          if(this._len >= 512){
            const merged = new Float32Array(this._len);
