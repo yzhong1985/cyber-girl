@@ -4,7 +4,8 @@ avatar_service.py  ——  Ditto 真人形象服务 (跑在 Ditto 的 py3.10 ven
 · 启动时加载 StreamSDK。
 · POST /generate  : body = 原始 int16 PCM(16k, 单声道) → 用照片生成这句的说话视频(mp4) → 通知播放页。
 · POST /generate_filler?index=N : 预生成过渡语视频(缓存进池子, 不推播放, 见"铺垫语"设计)。
-· GET  /play_filler : 从过渡语池子随机挑一段推给播放页(不生成, 接近零延迟)。
+· GET  /play_filler?chars=N : 从过渡语池子挑一段推给播放页(不生成, 接近零延迟)；
+                              带 chars(预期回复字数) 就按时长占比挑接近的, 不给就纯随机。
 · GET  /          : 浏览器播放页(顺序播放视频段 + 身体摆动 + 空闲显示静态照片)。
 · GET  /video/<f> : 提供生成的 mp4。
 · GET  /events    : SSE, 有新视频段就推给播放页。
@@ -256,14 +257,15 @@ def _generate(audio_f32: np.ndarray) -> str:
 
 def _generate_filler(audio_f32: np.ndarray, index: int) -> str:
     """预生成一段过渡语("让我想想哈"之类)视频, 固定文件名(不会被 seg_* 的定期清理删掉),
-    存进池子等 /play_filler 挑, 不直接推播放页。"""
+    存进池子(带时长, 供按回复长短挑选合适的过渡语)等 /play_filler 挑, 不直接推播放页。"""
     raw = str(OUT_DIR / f"filler_{index}_raw.mp4")
     wav = str(OUT_DIR / f"filler_{index}.wav")
     out = str(OUT_DIR / f"filler_{index}.mp4")
     _render(audio_f32, raw, wav, out)
     url = f"/video/filler_{index}.mp4"
+    duration = len(audio_f32) / 16000
     with _filler_lock:
-        _filler_pool[index] = url
+        _filler_pool[index] = {"url": url, "duration": duration}
     return url
 
 
@@ -364,11 +366,27 @@ def serve(port, avatar_path, tls_cert=None, tls_key=None):
             if path == "/idle.png":
                 return self._bytes(200, "image/png", Path(_avatar).read_bytes())
             if path == "/play_filler":
+                from urllib.parse import parse_qs, urlparse
+                qs = parse_qs(urlparse(self.path).query)
+                chars = None
+                if "chars" in qs:
+                    try:
+                        chars = float(qs["chars"][0])
+                    except ValueError:
+                        chars = None
                 with _filler_lock:
-                    pool = list(_filler_pool.values())
-                if not pool:
+                    entries = list(_filler_pool.values())
+                if not entries:
                     return self._bytes(200, "application/json", b'{"skip":true}')
-                url = random.choice(pool)
+                if chars is not None and len(entries) > 1:
+                    # 回复越长, 后面等的时间大概率越久, 挑一段时长占比相近的过渡语,
+                    # 比纯随机更自然(不会出现"啊"一声就秒接超长回复的错位感)
+                    entries.sort(key=lambda e: e["duration"])
+                    ratio = max(0.0, min(1.0, chars / 80.0))
+                    chosen = entries[round(ratio * (len(entries) - 1))]
+                else:
+                    chosen = random.choice(entries)
+                url = chosen["url"]
                 with _cond:
                     _videos.append(url); _cond.notify_all()
                 return self._bytes(200, "application/json",

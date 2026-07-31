@@ -1,9 +1,4 @@
-import os
-import random
-import ssl
 import time
-import urllib.request
-from threading import Thread
 
 import torchaudio
 from VAD.vad_iterator import VADIterator
@@ -56,16 +51,9 @@ class VADHandler(BaseHandler):
         self.enable_realtime_transcription = enable_realtime_transcription
         self.realtime_processing_pause = realtime_processing_pause
         self.text_output_queue = text_output_queue
-        # avatar 模式下, 说完话立刻推一段预生成好的过渡语("让我想想哈")占位播放,
-        # 跟 TTS handler 的 avatar_mode 用同一个环境变量判断; 只是查一下现成的
-        # 池子(avatar_service.py 那边已经预生成好了), 不在这里做任何生成/合成。
-        avatar_url = os.environ.get("DITTO_AVATAR_URL")
-        self.filler_url = (avatar_url.rsplit("/generate", 1)[0] + "/play_filler") if avatar_url else None
-        self.filler_enabled = os.environ.get("AVATAR_FILLER", "1").lower() not in ("0", "false", "no", "off")
-        # 触发延迟基本为0会显得像"你话音刚落她就抢答"，很假；模拟真人反应先"愣"一下
-        # 再接过渡语。范围随机避免每次都一模一样的节奏。
-        self.filler_delay_min = float(os.environ.get("AVATAR_FILLER_DELAY_MIN", "1.6"))
-        self.filler_delay_max = float(os.environ.get("AVATAR_FILLER_DELAY_MAX", "2.6"))
+        # 铺垫语触发点在 LLM/lm_output_processor.py(那时候真实回复文字已经出来了,
+        # 能按回复长短挑合适时长的过渡语), 不在 VAD 这里——VAD 这一刻还不知道
+        # 回复有多长。
         self.model, _ = torch.hub.load("snakers4/silero-vad", "silero_vad")
         self.iterator = VADIterator(
             self.model,
@@ -167,7 +155,6 @@ class VADHandler(BaseHandler):
                 if self.text_output_queue:
                     self.text_output_queue.put({"type": "speech_stopped"})
                     logger.debug("Speech stopped - sent event")
-                self._trigger_filler()
                 if self.audio_enhancement:
                     array = self._apply_audio_enhancement(array)
                 # Yield with final flag
@@ -191,34 +178,9 @@ class VADHandler(BaseHandler):
                 if self.text_output_queue:
                     self.text_output_queue.put({"type": "speech_stopped"})
                     logger.debug("Speech stopped - sent event")
-                self._trigger_filler()
                 if self.audio_enhancement:
                     array = self._apply_audio_enhancement(array)
                 yield array
-
-    def _trigger_filler(self):
-        """说完话过一小会儿(模拟人反应的停顿, 不是立刻接话)叫 Ditto 推一段预生成
-        好的过渡语占位播放, 跟正常的 STT→LLM→TTS→Ditto(在其它线程里)是真并行,
-        这个延迟只影响过渡语什么时候出现, 不影响真正回复的生成进度。放子线程里
-        fire-and-forget, 绝不能因为这个调用卡住 VAD 自己的循环。"""
-        if not (self.filler_url and self.filler_enabled):
-            return
-
-        delay = random.uniform(self.filler_delay_min, self.filler_delay_max)
-
-        def _fire():
-            time.sleep(delay)
-            try:
-                ctx = None
-                if self.filler_url.startswith("https://"):
-                    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-                    ctx.check_hostname = False
-                    ctx.verify_mode = ssl.CERT_NONE
-                urllib.request.urlopen(self.filler_url, timeout=5, context=ctx).read()
-            except Exception as e:
-                logger.debug(f"[VAD] 过渡语触发失败(不致命): {e}")
-
-        Thread(target=_fire, daemon=True).start()
 
     def _apply_audio_enhancement(self, array):
         """Apply audio enhancement if enabled."""
