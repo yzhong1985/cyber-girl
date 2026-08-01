@@ -10,6 +10,8 @@ avatar_service.py  ——  Ditto 真人形象服务 (跑在 Ditto 的 py3.10 ven
 · GET  /video/<f> : 提供生成的 mp4。
 · GET  /events    : SSE, 有新视频段就推给播放页。
 · GET  /idle.png  : 静态照片(空闲显示)。
+· POST /startup_status?stage=&percent= : 语音管线上报加载进度(内部调用)。
+· GET  /startup_status : 播放页轮询, 拿当前加载进度显示进度条。
 
 用法: python avatar_service.py --avatar ./avatar/girl.png --port 8902
      python avatar_service.py --backend pytorch   # 需要对比/排障时退回全PyTorch
@@ -160,6 +162,11 @@ _videos = []                       # 已生成的视频 url 列表(供 SSE 顺�
 _cond = threading.Condition()
 _filler_pool = {}                  # index -> 过渡语视频 url("让我想想哈"之类, 预生成好缓存的)
 _filler_lock = threading.Lock()
+# 语音管线(s2s_pipeline.py)自己上报的加载进度, 供 player.html 轮询显示进度条。
+# avatar_service 自己此时早就 ready 了(所以浏览器打得开页面), 管线那边还在加载
+# STT/LLM/TTS, WS(8765)连不上, 不然用户完全不知道还要等多久。
+_startup_status = {"stage": "等待语音管线启动上报…", "percent": 0}
+_startup_lock = threading.Lock()
 
 
 def _cleanup_segments(max_age_s=None):
@@ -365,6 +372,10 @@ def serve(port, avatar_path, tls_cert=None, tls_key=None):
                 return self._bytes(200, "text/html; charset=utf-8", html)
             if path == "/idle.png":
                 return self._bytes(200, "image/png", Path(_avatar).read_bytes())
+            if path == "/startup_status":
+                with _startup_lock:
+                    status = dict(_startup_status)
+                return self._bytes(200, "application/json", json.dumps(status).encode())
             if path == "/play_filler":
                 from urllib.parse import parse_qs, urlparse
                 qs = parse_qs(urlparse(self.path).query)
@@ -420,6 +431,18 @@ def serve(port, avatar_path, tls_cert=None, tls_key=None):
 
         def do_POST(self):
             path = self.path.split("?", 1)[0]
+            if path == "/startup_status":
+                from urllib.parse import parse_qs, urlparse
+                qs = parse_qs(urlparse(self.path).query)
+                stage = qs.get("stage", [""])[0]
+                try:
+                    percent = int(qs.get("percent", ["0"])[0])
+                except ValueError:
+                    percent = 0
+                with _startup_lock:
+                    _startup_status["stage"] = stage
+                    _startup_status["percent"] = max(0, min(100, percent))
+                return self._bytes(200, "application/json", b'{"ok":true}')
             if path == "/reset_fillers":
                 with _filler_lock:
                     _filler_pool.clear()

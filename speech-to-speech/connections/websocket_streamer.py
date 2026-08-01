@@ -4,6 +4,8 @@ import json
 import ssl
 from queue import Empty
 
+from utils.utils import report_startup
+
 logger = logging.getLogger(__name__)
 
 
@@ -74,6 +76,7 @@ class WebSocketStreamer:
         )
 
         logger.info("WebSocket server ready, waiting for connections...")
+        report_startup("已就绪", 100)
 
         # Start the sender task
         sender_task = asyncio.create_task(self._send_loop())

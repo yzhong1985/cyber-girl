@@ -20,6 +20,8 @@
  #hud{position:fixed;left:12px;top:10px;color:#8a8aa0;font-size:13px;z-index:3}
  #hud b{color:#9fc4ff}
  #mic{color:#6a6a80;margin-top:2px}
+ #progWrap{display:none;width:160px;height:4px;background:#26263a;border-radius:2px;margin-top:5px;overflow:hidden}
+ #progBar{width:0%;height:100%;background:#5a8fd6;transition:width .3s ease}
  #cap{position:fixed;left:0;right:0;bottom:22px;text-align:center;color:#d8d8e6;
    font-size:15px;z-index:3;padding:0 16px;text-shadow:0 1px 3px #000}
  #gate{position:fixed;inset:0;background:#0b0b0fcc;display:flex;align-items:center;justify-content:center;
@@ -30,7 +32,7 @@
   <video id=idle class=avatar src="/video/idle_loop.mp4" loop muted autoplay playsinline></video>
   <video id=vid class=avatar playsinline></video>
 </div>
-<div id=hud>cyber girl · <b id=st>待命</b><div id=mic></div></div>
+<div id=hud>cyber girl · <b id=st>待命</b><div id=mic></div><div id=progWrap><div id=progBar></div></div></div>
 <div id=cap></div>
 <div id=gate><div>▶ 点击进入(会请求麦克风权限)</div></div>
 <script>
@@ -115,9 +117,25 @@
 
  // 起服务时 Ditto 形象服务(8902,这个页面)比语音管线(8765, STT/LLM/TTS都要加载,
  // 常常要多等一两分钟)先就绪——不这样处理的话人是能看到了但说话完全没反应,
- // 会以为坏了。这里 WS 连不上/断开都自动重试, 用文字提示是不是还在启动。
- let ws = null, wsRetryTimer = null;
- const WS_RETRY_MS = 2500;
+ // 会以为坏了。这里 WS 连不上/断开都自动重试, 同时轮询 /startup_status 显示
+ // 加载进度条(语音管线自己上报到 Ditto 服务缓存的, 见 avatar_service.py)。
+ let ws = null, wsRetryTimer = null, statusPollTimer = null, polling = false;
+ const WS_RETRY_MS = 2500, STATUS_POLL_MS = 1500;
+ const progWrap=document.getElementById('progWrap'), progBar=document.getElementById('progBar');
+
+ async function pollStartupStatus(){
+   if(ws){ polling = false; return; }   // 已连上就不用再轮询了
+   try{
+     const r = await fetch('/startup_status', {cache:'no-store'});
+     const d = await r.json();
+     if(!ws && d.percent < 100){
+       progWrap.style.display = 'block';
+       progBar.style.width = d.percent + '%';
+       micEl.textContent = `语音服务启动中: ${d.stage}(${d.percent}%)`;
+     }
+   }catch(_){ /* avatar_service 都还没起来的极早期, 忽略 */ }
+   statusPollTimer = setTimeout(pollStartupStatus, STATUS_POLL_MS);
+ }
 
  function connectWS(){
    let sock;
@@ -131,13 +149,19 @@
      return;
    }
    let openedOnce = false;
-   sock.onopen = ()=>{ openedOnce = true; ws = sock; micEl.textContent = '聆听中'; };
+   sock.onopen = ()=>{
+     openedOnce = true; ws = sock; micEl.textContent = '聆听中';
+     progWrap.style.display = 'none';
+     polling = false;
+     clearTimeout(statusPollTimer);
+   };
    sock.onclose = ()=>{
      ws = null;
      micEl.textContent = openedOnce
        ? '连接已断开, 重连中…'
-       : '语音服务启动中(常需1~2分钟), 自动重试…';
+       : '语音服务启动中…';
      wsRetryTimer = setTimeout(connectWS, WS_RETRY_MS);
+     if(!openedOnce && !polling){ polling = true; pollStartupStatus(); }
    };
    sock.onerror = ()=>{ /* onclose 紧跟着会触发, 提示统一交给 onclose 处理 */ };
    sock.onmessage = (e)=>{

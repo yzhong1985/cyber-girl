@@ -44,6 +44,7 @@ from transformers import (
 )
 
 from utils.thread_manager import ThreadManager
+from utils.utils import report_startup
 from voice_registry import VoiceRegistry, serve_panel
 from live2d_panel import serve_live2d
 
@@ -333,6 +334,7 @@ def build_pipeline(
     vad_setup_kwargs = vars(vad_handler_kwargs)
     vad_setup_kwargs["text_output_queue"] = text_output_queue
 
+    report_startup("加载语音活动检测(VAD)", 5)
     vad = VADHandler(
         stop_event,
         queue_in=recv_audio_chunks_queue,
@@ -341,7 +343,9 @@ def build_pipeline(
         setup_kwargs=vad_setup_kwargs,
     )
 
+    report_startup("加载语音识别(STT)", 15)
     stt = get_stt_handler(module_kwargs, stop_event, spoken_prompt_queue, text_prompt_queue, whisper_stt_handler_kwargs, faster_whisper_stt_handler_kwargs, paraformer_stt_handler_kwargs, mlx_audio_whisper_stt_handler_kwargs, parakeet_tdt_stt_handler_kwargs)
+    report_startup("连接大语言模型(LLM)", 40)
     lm = get_llm_handler(module_kwargs, stop_event, text_prompt_queue, lm_response_queue, language_model_handler_kwargs, open_api_language_model_handler_kwargs, mlx_language_model_handler_kwargs)
 
     # Add LM output processor to extract tools and forward clean text to TTS
@@ -353,7 +357,9 @@ def build_pipeline(
         setup_kwargs={"text_output_queue": text_output_queue},
     )
 
+    report_startup("加载语音合成(TTS)+预生成过渡语", 60)
     tts = get_tts_handler(module_kwargs, stop_event, lm_processed_queue, send_audio_chunks_queue, should_listen, parler_tts_handler_kwargs, melo_tts_handler_kwargs, chat_tts_handler_kwargs, facebook_mms_tts_handler_kwargs, pocket_tts_handler_kwargs, kokoro_tts_handler_kwargs)
+    report_startup("即将就绪", 95)
 
     return ThreadManager([*comms_handlers, vad, stt, lm, lm_processor, tts])
 
