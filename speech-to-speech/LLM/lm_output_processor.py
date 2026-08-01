@@ -7,6 +7,7 @@ Intercepts LLM output to:
 3. (avatar 模式) 触发一段跟回复长短匹配的过渡语占位播放
 """
 
+import json
 import logging
 import os
 import random
@@ -57,7 +58,13 @@ class LMOutputProcessor(BaseHandler):
         # 稳定但~14s空白); 开=按句切开, 第一句生成完就先播, 后面的句子边播
         # 边生成(见 qwen3_tts_handler.py 的 is_last 处理)。新功能, 默认关,
         # 出问题改回0就能秒回退到原路线。
-        self.stream_sentences = os.environ.get("AVATAR_STREAM_SENTENCES", "0").lower() not in ("0", "false", "no", "off")
+        # 不是启动时读死一次: 页面上有个实时开关(存在 avatar_service 那边),
+        # 每次处理新回复前现查一下当前值(本机回环请求, 几毫秒), 不用重启管线
+        # 就能切换。env var 只是启动时的默认值(查不到/avatar服务没起来时兜底)。
+        self.stream_sentences_default = os.environ.get("AVATAR_STREAM_SENTENCES", "0").lower() not in ("0", "false", "no", "off")
+        self.settings_url = f"{self.filler_url.rsplit('/play_filler', 1)[0]}/settings" if self.filler_url else None
+        if self.settings_url:
+            self._push_settings(stream_sentences=self.stream_sentences_default)
 
     def _split_sentences(self, text: str, min_len: int = 6):
         """按中文标点(。！？!?)切句; 太短的碎句(比如单独一个"嗯。")并进下一句,
@@ -86,6 +93,40 @@ class LMOutputProcessor(BaseHandler):
                 merged.append(buf)
         return merged
 
+    @staticmethod
+    def _ssl_ctx_for(url: str):
+        if not url.startswith("https://"):
+            return None
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        return ctx
+
+    def _push_settings(self, **kwargs):
+        """把设置同步写到 avatar_service(初始化时把 env var 默认值同步过去, 让
+        页面加载时开关状态跟启动配置一致)。失败不致命(比如 avatar 服务还没起来,
+        或者干脆没配置avatar模式)。"""
+        try:
+            qs = "&".join(f"{k}={'1' if v else '0'}" for k, v in kwargs.items())
+            url = f"{self.settings_url}?{qs}"
+            req = urllib.request.Request(url, data=b"", method="POST")
+            urllib.request.urlopen(req, timeout=3, context=self._ssl_ctx_for(url)).read()
+        except Exception as e:
+            logger.debug(f"[LMProcessor] 同步设置到avatar服务失败(不致命): {e}")
+
+    def _get_stream_sentences(self) -> bool:
+        """现查一下页面上的实时开关; 查不到(avatar服务没起来/网络问题/没配avatar
+        模式)就退回启动时的环境变量默认值, 不会因为这个查询失败就打断生成。"""
+        if not self.settings_url:
+            return self.stream_sentences_default
+        try:
+            req = urllib.request.Request(self.settings_url, method="GET")
+            resp = urllib.request.urlopen(req, timeout=0.5, context=self._ssl_ctx_for(self.settings_url)).read()
+            return bool(json.loads(resp).get("stream_sentences", self.stream_sentences_default))
+        except Exception as e:
+            logger.debug(f"[LMProcessor] 查询实时设置失败(退回默认值): {e}")
+            return self.stream_sentences_default
+
     def _trigger_filler(self, text_chunk: str):
         """fire-and-forget 叫 Ditto 按 text_chunk 的字数挑一段时长匹配的过渡语
         推去占位播放; 跟正常的 TTS→Ditto(其它线程)是真并行, 不阻塞这里。"""
@@ -99,12 +140,9 @@ class LMOutputProcessor(BaseHandler):
         def _fire():
             time.sleep(delay)
             try:
-                ctx = None
-                if url.startswith("https://"):
-                    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-                    ctx.check_hostname = False
-                    ctx.verify_mode = ssl.CERT_NONE
-                urllib.request.urlopen(url, timeout=5, context=ctx).read()
+                urllib.request.urlopen(
+                    urllib.request.Request(url, method="GET"), timeout=5, context=self._ssl_ctx_for(url)
+                ).read()
             except Exception as e:
                 logger.debug(f"[LMProcessor] 过渡语触发失败(不致命): {e}")
 
@@ -144,7 +182,7 @@ class LMOutputProcessor(BaseHandler):
         if not text_chunk or not text_chunk.strip():
             return
 
-        if self.stream_sentences:
+        if self._get_stream_sentences():
             sentences = self._split_sentences(text_chunk) or [text_chunk]
         else:
             sentences = [text_chunk]

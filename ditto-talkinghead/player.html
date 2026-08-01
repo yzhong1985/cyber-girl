@@ -53,6 +53,7 @@
     <button class=segBtn data-mode=ptt>按住说话</button>
   </div>
   <label class=swLabel><input type=checkbox id=fillerChk> 过渡语</label>
+  <label class=swLabel><input type=checkbox id=streamChk> 分句流式</label>
 </div>
 <button id=pttBtn>按住<br>说话</button>
 <div id=gate><div>▶ 点击进入(会请求麦克风权限)</div></div>
@@ -95,7 +96,8 @@
  // ---- 设置: 输入模式(持续聆听/按住说话) + 过渡语开关, 记 localStorage ----
  let inputMode = localStorage.getItem('cg_input_mode') || 'continuous';
  let fillerEnabled = localStorage.getItem('cg_filler') !== '0';   // 默认开
- const pttBtn=document.getElementById('pttBtn'), fillerChk=document.getElementById('fillerChk');
+ const pttBtn=document.getElementById('pttBtn'), fillerChk=document.getElementById('fillerChk'),
+       streamChk=document.getElementById('streamChk');
  fillerChk.checked = fillerEnabled;
 
  function applyModeUI(){
@@ -112,6 +114,17 @@
  fillerChk.onchange=()=>{
    fillerEnabled=fillerChk.checked;
    localStorage.setItem('cg_filler', fillerEnabled ? '1' : '0');
+ };
+
+ // 分句流式播放: 跟过渡语开关不一样, 这个是真的要影响语音管线怎么生成回复,
+ // 不是纯前端的事——状态存在 Ditto 服务那边(/settings), 语音管线每次处理新
+ // 回复前会现查一次, 所以这里改了下一句回复就按新设置生成, 不用重启。
+ // 初始状态从服务端拿(不是localStorage), 因为它是服务端说了算的实际状态。
+ fetch('/settings', {cache:'no-store'}).then(r=>r.json()).then(d=>{
+   streamChk.checked = !!d.stream_sentences;
+ }).catch(()=>{});
+ streamChk.onchange=()=>{
+   fetch(`/settings?stream_sentences=${streamChk.checked ? 1 : 0}`, {method:'POST'}).catch(()=>{});
  };
 
  // 按住说话: 按住时才真正把音频发出去; 松开后再"多发"一小段(采集到的多半是

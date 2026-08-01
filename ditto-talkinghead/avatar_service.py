@@ -12,6 +12,8 @@ avatar_service.py  ——  Ditto 真人形象服务 (跑在 Ditto 的 py3.10 ven
 · GET  /idle.png  : 静态照片(空闲显示)。
 · POST /startup_status?stage=&percent= : 语音管线上报加载进度(内部调用)。
 · GET  /startup_status : 播放页轮询, 拿当前加载进度显示进度条。
+· GET/POST /settings?stream_sentences=0|1 : 页面上的实时开关(分句流式播放等),
+  不用重启管线——语音管线每次处理新回复前会来查一下当前值。
 
 用法: python avatar_service.py --avatar ./avatar/girl.png --port 8902
      python avatar_service.py --backend pytorch   # 需要对比/排障时退回全PyTorch
@@ -167,6 +169,11 @@ _filler_lock = threading.Lock()
 # STT/LLM/TTS, WS(8765)连不上, 不然用户完全不知道还要等多久。
 _startup_status = {"stage": "等待语音管线启动上报…", "percent": 0}
 _startup_lock = threading.Lock()
+# 页面上的实时开关(不用重启就能生效): player.html 改了就 POST 到这里存一下,
+# 语音管线(lm_output_processor.py)每次处理新回复前来查一下当前值——本机回环
+# 请求几毫秒, 比启动时读死一次环境变量灵活, 不用重启整条管线。
+_settings = {"stream_sentences": False}
+_settings_lock = threading.Lock()
 
 
 def _cleanup_segments(max_age_s=None):
@@ -376,6 +383,10 @@ def serve(port, avatar_path, tls_cert=None, tls_key=None):
                 with _startup_lock:
                     status = dict(_startup_status)
                 return self._bytes(200, "application/json", json.dumps(status).encode())
+            if path == "/settings":
+                with _settings_lock:
+                    settings = dict(_settings)
+                return self._bytes(200, "application/json", json.dumps(settings).encode())
             if path == "/play_filler":
                 from urllib.parse import parse_qs, urlparse
                 qs = parse_qs(urlparse(self.path).query)
@@ -443,6 +454,15 @@ def serve(port, avatar_path, tls_cert=None, tls_key=None):
                     _startup_status["stage"] = stage
                     _startup_status["percent"] = max(0, min(100, percent))
                 return self._bytes(200, "application/json", b'{"ok":true}')
+            if path == "/settings":
+                from urllib.parse import parse_qs, urlparse
+                qs = parse_qs(urlparse(self.path).query)
+                if "stream_sentences" in qs:
+                    with _settings_lock:
+                        _settings["stream_sentences"] = qs["stream_sentences"][0].lower() not in ("0", "false", "no", "off")
+                with _settings_lock:
+                    settings = dict(_settings)
+                return self._bytes(200, "application/json", json.dumps(settings).encode())
             if path == "/reset_fillers":
                 with _filler_lock:
                     _filler_pool.clear()
