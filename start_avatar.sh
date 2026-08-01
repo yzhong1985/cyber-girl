@@ -11,6 +11,8 @@
 # ========================================================================
 set -e
 ROOT=/mnt/e/Projects/cyberGirl
+SCRIPT_START=$(date +%s)
+log() { echo "[$(date +%H:%M:%S)] $*"; }
 
 # ---- 命令行参数(优先级高于 config.env): --skip-mask 关抠图, --web 开网页版 ----
 MATTE_CLI=""   # 空=听配置; on/off=命令行强制
@@ -89,15 +91,15 @@ export NO_PROXY="$no_proxy"
 
 # ---- 1) LLM 引擎(Windows CUDA llama-server) ----
 if curl -s --max-time 3 "http://${LLM_HOST}:8080/health" 2>/dev/null | grep -q ok; then
-  echo "✓ LLM 引擎已在运行"
+  log "✓ LLM 引擎已在运行"
 else
-  echo "→ 启动 LLM 引擎(首次留意 Windows 防火墙放行)..."
+  log "→ 启动 LLM 引擎(首次留意 Windows 防火墙放行)..."
   nohup "$ROOT/llama-win/llama-server.exe" -m "$LLM_GGUF" \
     --host 0.0.0.0 --port 8080 -ngl 99 -c "$LLM_CTX" -fa on -a "$LLM_MODEL" \
     > "$ROOT/_llm_server.log" 2>&1 &
   echo -n "  等待模型加载 "
   for i in $(seq 1 60); do
-    curl -s --max-time 3 "http://${LLM_HOST}:8080/health" 2>/dev/null | grep -q ok && { echo " ✓"; break; }
+    curl -s --max-time 3 "http://${LLM_HOST}:8080/health" 2>/dev/null | grep -q ok && { echo " ✓ [$(date +%H:%M:%S)]"; break; }
     echo -n "."; sleep 2
   done
 fi
@@ -107,7 +109,7 @@ fi
 SCHEME="http"; CURL_INSECURE=""
 [ "$WEB" = "1" ] && { SCHEME="https"; CURL_INSECURE="-k"; }
 if curl -s $CURL_INSECURE --max-time 3 "${SCHEME}://127.0.0.1:8902/idle.png" -o /dev/null 2>/dev/null; then
-  echo "✓ Ditto 形象服务已在运行(抠图/后端/网页版沿用上次启动; 想改需先 bash stop.sh)"
+  log "✓ Ditto 形象服务已在运行(抠图/后端/网页版沿用上次启动; 想改需先 bash stop.sh)"
 else
   COMPILE_FLAG=""
   WAIT_HINT="约 30s"
@@ -126,9 +128,9 @@ else
     WAIT_HINT="约 100s(含 ${COMPILE_HINT} 编译预热)"
   fi
   if [ -n "$MATTE_FLAG" ]; then
-    echo "→ 启动 Ditto 形象服务(抠图关: 照片原背景, 更快; 后端=$AVATAR_BACKEND; 加载模型 $WAIT_HINT)..."
+    log "→ 启动 Ditto 形象服务(抠图关: 照片原背景, 更快; 后端=$AVATAR_BACKEND; 加载模型 $WAIT_HINT)..."
   else
-    echo "→ 启动 Ditto 形象服务(抠图开: 合成到背景; 后端=$AVATAR_BACKEND; 加载模型 $WAIT_HINT)..."
+    log "→ 启动 Ditto 形象服务(抠图开: 合成到背景; 后端=$AVATAR_BACKEND; 加载模型 $WAIT_HINT)..."
   fi
   ( cd "$ROOT/ditto-talkinghead" \
     && export PULSE_SERVER=unix:/mnt/wslg/PulseServer \
@@ -137,7 +139,7 @@ else
        > "$ROOT/_avatar_svc.log" 2>&1 & )
   echo -n "  等待形象服务就绪 "
   for i in $(seq 1 150); do
-    curl -s $CURL_INSECURE --max-time 3 "${SCHEME}://127.0.0.1:8902/idle.png" -o /dev/null 2>/dev/null && { echo " ✓"; break; }
+    curl -s $CURL_INSECURE --max-time 3 "${SCHEME}://127.0.0.1:8902/idle.png" -o /dev/null 2>/dev/null && { echo " ✓ [$(date +%H:%M:%S)]"; break; }
     echo -n "."; sleep 2
   done
 fi
@@ -157,7 +159,7 @@ MODE_FLAG="--mode local"
 if [ "$WEB" = "1" ]; then
   MODE_FLAG="--mode websocket --ws_host 0.0.0.0 --ws_port $WS_PORT $TLS_FLAG_WS"
 fi
-echo "→ 启动语音管线(角色=$PERSONA, STT语言=$STT_LANGUAGE, 网页版=$([ "$WEB" = "1" ] && echo 开 || echo 关))"
+log "→ 启动语音管线(角色=$PERSONA, STT语言=$STT_LANGUAGE, 网页版=$([ "$WEB" = "1" ] && echo 开 || echo 关)); LLM+Ditto已耗时 $(( $(date +%s) - SCRIPT_START ))s, 接下来还要加载STT/LLM客户端/TTS模型(下面Python自己的日志带时间戳, 通常再需30~60s)"
 if [ "$WEB" = "1" ]; then
   LAN_IP=$(echo "$LAN_IPS" | head -1)
   echo "  本机浏览器打开 https://127.0.0.1:8902/ 点「进入」(会弹证书不受信任警告, 选择继续前往)"
