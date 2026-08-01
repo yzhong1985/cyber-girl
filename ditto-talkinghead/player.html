@@ -75,8 +75,17 @@
    const next=q.shift();
    if(!next){showIdle(); return;}
    playing=true; st.textContent='说话中';
-   idle.pause(); idle.style.display='none';
-   vid.style.display='block'; vid.muted=false; vid.src=next; vid.play().catch(()=>{playing=false;});
+   vid.muted=false;
+   // 先把新视频加载到"有画面可播"了, 再隐藏待命循环——反过来做(先隐藏待命,
+   // 再等新视频加载)中间会有一小段两个<video>都没画面, 背景色露出来就是那个
+   // "闪一下"。loadeddata 是第一帧解码好、可以出画面的最早时机。
+   vid.onloadeddata=()=>{
+     vid.onloadeddata=null;
+     idle.pause(); idle.style.display='none';
+     vid.style.display='block';
+     vid.play().catch(()=>{playing=false;});
+   };
+   vid.src=next;
  }
  vid.onended=()=>{playing=false; showIdle(); pump();};
  vid.onerror=()=>{playing=false; showIdle(); pump();};
