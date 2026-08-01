@@ -27,6 +27,19 @@
  #gate{position:fixed;inset:0;background:#0b0b0fcc;display:flex;align-items:center;justify-content:center;
    cursor:pointer;z-index:4}
  #gate div{color:#e8e8ef;font-size:18px;padding:14px 26px;border:1px solid #33334a;border-radius:12px;background:#16161f}
+ /* 顶部设置栏: 输入模式切换 + 过渡语开关, z-index比gate还高, 进入前就能先选好 */
+ #settings{position:fixed;right:12px;top:10px;z-index:6;display:flex;gap:10px;align-items:center;
+   font-size:12px;color:#8a8aa0}
+ .segControl{display:flex;border:1px solid #33334a;border-radius:8px;overflow:hidden}
+ .segBtn{background:#16161f;color:#8a8aa0;border:none;padding:6px 10px;font-size:12px;cursor:pointer;
+   font-family:inherit}
+ .segBtn.on{background:#2a3550;color:#9fc4ff}
+ .swLabel{display:flex;align-items:center;gap:4px;cursor:pointer;user-select:none;white-space:nowrap}
+ /* 按住说话按钮: 底部居中悬浮圆按钮, 只在"按住说话"模式下显示 */
+ #pttBtn{display:none;position:fixed;left:50%;bottom:26px;transform:translateX(-50%);z-index:5;
+   width:76px;height:76px;border-radius:50%;border:2px solid #4a7fd4;background:#1e2a3fcc;
+   color:#9fc4ff;font-size:12px;cursor:pointer;user-select:none;touch-action:none}
+ #pttBtn.active{background:#4a7fd4;color:#fff;transform:translateX(-50%) scale(1.08)}
 </style></head><body>
 <div id=stage>
   <video id=idle class=avatar src="/video/idle_loop.mp4" loop muted autoplay playsinline></video>
@@ -34,6 +47,14 @@
 </div>
 <div id=hud>cyber girl · <b id=st>待命</b><div id=mic></div><div id=progWrap><div id=progBar></div></div></div>
 <div id=cap></div>
+<div id=settings>
+  <div class=segControl id=modeToggle>
+    <button class=segBtn data-mode=continuous>持续聆听</button>
+    <button class=segBtn data-mode=ptt>按住说话</button>
+  </div>
+  <label class=swLabel><input type=checkbox id=fillerChk> 过渡语</label>
+</div>
+<button id=pttBtn>按住<br>说话</button>
 <div id=gate><div>▶ 点击进入(会请求麦克风权限)</div></div>
 <script>
  const idle=document.getElementById('idle'), vid=document.getElementById('vid'),
@@ -59,7 +80,54 @@
  vid.onended=()=>{playing=false; showIdle(); pump();};
  vid.onerror=()=>{playing=false; showIdle(); pump();};
  const es=new EventSource('/events');
- es.onmessage=e=>{try{const d=JSON.parse(e.data); if(d.video){q.push(d.video); pump();}}catch(_){}};
+ es.onmessage=e=>{
+   try{
+     const d=JSON.parse(e.data);
+     if(d.video){
+       // 过渡语视频固定 /video/filler_*.mp4 命名, 跟正式回复 /video/seg_*.mp4
+       // 天然可区分; 开关关了就直接跳过不播(纯前端, 不用通知后端)
+       if(!fillerEnabled && d.video.includes('/video/filler_')) return;
+       q.push(d.video); pump();
+     }
+   }catch(_){}
+ };
+
+ // ---- 设置: 输入模式(持续聆听/按住说话) + 过渡语开关, 记 localStorage ----
+ let inputMode = localStorage.getItem('cg_input_mode') || 'continuous';
+ let fillerEnabled = localStorage.getItem('cg_filler') !== '0';   // 默认开
+ const pttBtn=document.getElementById('pttBtn'), fillerChk=document.getElementById('fillerChk');
+ fillerChk.checked = fillerEnabled;
+
+ function applyModeUI(){
+   document.querySelectorAll('.segBtn').forEach(b=>b.classList.toggle('on', b.dataset.mode===inputMode));
+   pttBtn.style.display = inputMode==='ptt' ? 'block' : 'none';
+ }
+ applyModeUI();
+ document.querySelectorAll('.segBtn').forEach(b=>{
+   b.onclick=()=>{
+     inputMode=b.dataset.mode; localStorage.setItem('cg_input_mode', inputMode);
+     pttActive=false; applyModeUI();
+   };
+ });
+ fillerChk.onchange=()=>{
+   fillerEnabled=fillerChk.checked;
+   localStorage.setItem('cg_filler', fillerEnabled ? '1' : '0');
+ };
+
+ // 按住说话: 按住时才真正把音频发出去; 松开后再"多发"一小段(采集到的多半是
+ // 环境静音), 让服务端现成的 VAD 静默判定(>500ms)自然收尾——不用额外发协议
+ // 消息去"强制结束一句", 复用现有机制。
+ let pttActive=false, pttTailTimer=null;
+ const PTT_TAIL_MS=700;
+ function pttStart(e){ e.preventDefault(); clearTimeout(pttTailTimer); pttActive=true; pttBtn.classList.add('active'); }
+ function pttEnd(e){
+   e.preventDefault(); pttBtn.classList.remove('active'); clearTimeout(pttTailTimer);
+   pttTailTimer=setTimeout(()=>{ pttActive=false; }, PTT_TAIL_MS);
+ }
+ pttBtn.addEventListener('pointerdown', pttStart);
+ pttBtn.addEventListener('pointerup', pttEnd);
+ pttBtn.addEventListener('pointercancel', pttEnd);
+ pttBtn.addEventListener('pointerleave', pttEnd);
 
  // ---- 网页版: 浏览器采麦, 经 WebSocket 发给语音管线(端口约定 8765) ----
  const WS_PORT = 8765;
@@ -191,8 +259,12 @@
    await audioCtx.audioWorklet.addModule(blobURL);
    const src = audioCtx.createMediaStreamSource(stream);
    const node = new AudioWorkletNode(audioCtx, 'pcm-worklet');
-   // 引用的是外层可变的 ws 变量(不是某次连接的快照), 断线重连后自动跟着换新连接发送
-   node.port.onmessage = (e)=>{ if(ws && ws.readyState === WebSocket.OPEN) ws.send(e.data); };
+   // 引用的是外层可变的 ws 变量(不是某次连接的快照), 断线重连后自动跟着换新连接发送。
+   // 持续聆听模式: 一直发; 按住说话模式: 只有按住(含松开后的尾巴延迟)才发。
+   node.port.onmessage = (e)=>{
+     if(!ws || ws.readyState !== WebSocket.OPEN) return;
+     if(inputMode === 'continuous' || pttActive) ws.send(e.data);
+   };
    src.connect(node);
    // AudioWorkletNode 必须连到 destination 所在的图里, process() 才会被浏览器持续调用
    // (没连到输出的"悬空"节点很多实现里根本不会拉动处理); 接一个增益0的节点静音,
