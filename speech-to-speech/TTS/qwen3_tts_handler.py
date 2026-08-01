@@ -221,15 +221,23 @@ class Qwen3TTSHandler(BaseHandler):
     # ---------- 管线接口 ----------
 
     def process(self, llm_sentence):
+        # LMOutputProcessor 现在统一发 (text, lang, is_last) 三元组(分句流式关
+        # 的时候也是, 只是永远只有一个元素/is_last=True); 兼容一下万一收到旧的
+        # 二元组(比如别的上游没走 LMOutputProcessor)。
+        is_last = True
         if isinstance(llm_sentence, tuple):
-            llm_sentence, _lang_code = llm_sentence
+            if len(llm_sentence) >= 3:
+                llm_sentence, _lang_code, is_last = llm_sentence[0], llm_sentence[1], llm_sentence[2]
+            else:
+                llm_sentence, _lang_code = llm_sentence
 
-        logger.info(f"[TTS] 收到文本: {llm_sentence!r}")
+        logger.info(f"[TTS] 收到文本: {llm_sentence!r} (is_last={is_last})")
 
         # 空句 / 纯标点直接跳过，否则会合成出一段杂音
         if not llm_sentence or not llm_sentence.strip(" 。，！？.,!?…~"):
             logger.info("[TTS] 文本为空/纯标点，跳过")
-            self.should_listen.set()
+            if is_last:
+                self.should_listen.set()
             return
 
         try:
@@ -237,18 +245,20 @@ class Qwen3TTSHandler(BaseHandler):
             audio = self._to_16k_int16(wav, sr)
         except Exception as e:
             logger.error(f"[TTS] 合成失败: {e}", exc_info=True)
-            self.should_listen.set()
+            if is_last:
+                self.should_listen.set()
             return
 
         logger.info(f"[TTS] 合成完成: {audio.size} 采样 ≈ {audio.size/TARGET_SR:.2f}s")
         if audio.size == 0:
             logger.warning("[TTS] 输出为空音频，跳过")
-            self.should_listen.set()
+            if is_last:
+                self.should_listen.set()
             return
 
         # avatar 模式: 音频交给 Ditto 形象服务生成说话视频, 不本地播放
         if self.avatar_mode:
-            self._send_to_avatar(audio)
+            self._send_to_avatar(audio, is_last=is_last)
             return
 
         # 补零到 blocksize 整数倍，避免最后一块被截断爆音
@@ -261,8 +271,11 @@ class Qwen3TTSHandler(BaseHandler):
         for i in range(0, len(audio), self.blocksize):
             yield audio[i : i + self.blocksize]
 
-        # 说完了，把麦克风放回去 —— 漏掉这行 AI 说完一句就聋了
-        self.should_listen.set()
+        # 说完了，把麦克风放回去 —— 漏掉这行 AI 说完一句就聋了(分句模式下只有
+        # 最后一句才放, 中间几句不放, 不然一轮多句回复里用户能在她说到一半时
+        # 就抢话)
+        if is_last:
+            self.should_listen.set()
 
     def _avatar_ssl_ctx(self):
         # 网页版下 avatar_url 是 https://127.0.0.1:8902(本机自签证书, 给浏览器用的),
@@ -274,9 +287,15 @@ class Qwen3TTSHandler(BaseHandler):
         ctx.verify_mode = ssl.CERT_NONE
         return ctx
 
-    def _send_to_avatar(self, audio: np.ndarray):
-        """把整句音频(int16 16k)POST 给 Ditto 形象服务; 阻塞到视频生成完，
-        再等约一个音频时长(浏览器播放期)才放回麦克风，避免边说边听。"""
+    def _send_to_avatar(self, audio: np.ndarray, is_last: bool = True):
+        """把这一段音频(int16 16k)POST 给 Ditto 形象服务; 阻塞到视频生成完。
+
+        is_last=True(默认, 非分句模式下永远如此): 再等约一个音频时长(浏览器
+        播放期)才放回麦克风, 避免边说边听。
+        is_last=False(分句流式模式的中间句): 生成完立刻返回, 不等playback,
+        也不放开麦克风——线程紧接着去处理队列里下一句的合成, 这样才有
+        "边播边生成"的流水线效果, 不然分句反而比不分句更慢(每句都傻等一次
+        播放时长)。"""
         dur = len(audio) / TARGET_SR
         try:
             req = urllib.request.Request(
@@ -285,7 +304,9 @@ class Qwen3TTSHandler(BaseHandler):
             urllib.request.urlopen(req, timeout=180, context=self._avatar_ssl_ctx()).read()   # 阻塞：生成完成
         except Exception as e:
             logger.error(f"[TTS] 发送到形象服务失败: {e}")
-            self.should_listen.set()
+            self.should_listen.set()   # 出错兜底: 不管是不是最后一句都要把麦克风还回去, 别卡死
+            return
+        if not is_last:
             return
         # 生成已耗时约 1.3×dur；再等 dur 让浏览器把这段视频播完
         time.sleep(dur)
