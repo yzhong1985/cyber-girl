@@ -164,7 +164,10 @@ input[type=file]{width:100%%;color:#a8a8c0;font-size:13px}
 .submit:hover{background:#243452}
 .msg{font-size:13px;margin-top:10px;min-height:18px}
 .msg.err{color:#e08a8a}
+.back{display:inline-block;color:#6a8fc0;text-decoration:none;font-size:13px;margin-bottom:8px}
+.back:hover{color:#9fc4ff}
 </style><div class=wrap>
+<a class=back id=backLink href="#" target=_blank>← 返回对话</a>
 <h1>当前角色 · %(active)s</h1>
 %(cards)s
 <h2>新建角色</h2>
@@ -190,6 +193,14 @@ input[type=file]{width:100%%;color:#a8a8c0;font-size:13px}
 </form>
 </div>
 <script>
+// 面板(8900)固定是明文http, 但对话页(8902)本机模式是http、网页版(--web)是
+// 自签https, 面板这边不知道启动时选的哪种——探测一下哪个能连通再定链接
+(function(){
+  const link = document.getElementById('backLink');
+  fetch('http://127.0.0.1:8902/idle.png', {mode:'no-cors', cache:'no-store'})
+    .then(()=>{ link.href = 'http://127.0.0.1:8902/'; })
+    .catch(()=>{ link.href = 'https://127.0.0.1:8902/'; });
+})();
 async function go(n){await fetch('/switch?name='+encodeURIComponent(n));location.reload()}
 async function del(n){
   if(!confirm('删除角色「'+n+'」？此操作不可撤销。')) return;

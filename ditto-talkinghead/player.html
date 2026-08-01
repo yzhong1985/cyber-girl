@@ -35,6 +35,10 @@
    font-family:inherit}
  .segBtn.on{background:#2a3550;color:#9fc4ff}
  .swLabel{display:flex;align-items:center;gap:4px;cursor:pointer;user-select:none;white-space:nowrap}
+ /* 角色管理面板(8900)只监听 127.0.0.1(本机管理用, 不对局域网开放), 所以这个
+    链接只在本机访问本页时才显示, 局域网设备看到也点不通, 索性藏起来 */
+ #panelLink{color:#6a8fc0;text-decoration:none;border:1px solid #33334a;border-radius:8px;padding:6px 10px}
+ #panelLink:hover{color:#9fc4ff;border-color:#4a7fd4}
  /* 按住说话按钮: 底部居中悬浮圆按钮, 只在"按住说话"模式下显示 */
  #pttBtn{display:none;position:fixed;left:50%;bottom:26px;transform:translateX(-50%);z-index:5;
    width:76px;height:76px;border-radius:50%;border:2px solid #4a7fd4;background:#1e2a3fcc;
@@ -54,6 +58,7 @@
   </div>
   <label class=swLabel><input type=checkbox id=fillerChk> 过渡语</label>
   <label class=swLabel><input type=checkbox id=streamChk> 分句流式</label>
+  <a id=panelLink href="http://127.0.0.1:8900/" target=_blank style=display:none>管理角色</a>
 </div>
 <button id=pttBtn>按住<br>说话</button>
 <div id=gate><div>▶ 点击进入(会请求麦克风权限)</div></div>
@@ -62,6 +67,9 @@
        st=document.getElementById('st'), gate=document.getElementById('gate'),
        micEl=document.getElementById('mic'), capEl=document.getElementById('cap');
  const q=[]; let playing=false, ready=false;
+ if(location.hostname==='127.0.0.1'||location.hostname==='localhost'){
+   document.getElementById('panelLink').style.display='';
+ }
  const IDLE_RATE=0.2;                 // 待命头部动作速度(1=原速, 越小越慢越稳)
  idle.playbackRate=IDLE_RATE;
  idle.play().catch(()=>{});
