@@ -458,7 +458,7 @@ def get_llm_handler(
             stop_event,
             queue_in=text_prompt_queue,
             queue_out=lm_response_queue,
-            setup_kwargs=vars(open_api_language_model_handler_kwargs),
+            setup_kwargs={**vars(open_api_language_model_handler_kwargs), "registry": REGISTRY},
         )
 
     elif module_kwargs.llm == "mlx-lm":

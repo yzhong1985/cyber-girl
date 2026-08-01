@@ -66,10 +66,12 @@ class OpenApiModelHandler(BaseHandler):
         chat_size=1,
         init_chat_role="system",
         init_chat_prompt="You are a helpful AI assistant.",
+        registry=None,
     ):
         self.model_name = model_name
         self.stream = stream
         self.chat = Chat(chat_size)
+        self.init_chat_role = init_chat_role
         if init_chat_role:
             if not init_chat_prompt:
                 raise ValueError(
@@ -78,7 +80,23 @@ class OpenApiModelHandler(BaseHandler):
             self.chat.init_chat({"role": init_chat_role, "content": init_chat_prompt})
         self.user_role = user_role
         self.client = OpenAI(api_key=api_key, base_url=base_url)
+        # 多角色管理: 切角色时把 system_prompt 换成新角色的, 并清空对话历史
+        # (不然新角色会"记得"上一个角色聊过的东西, 很奇怪)。之前这里完全没接,
+        # 只有音色(TTS)会跟着热切换, 人格是死的。
+        self.registry = registry
+        if self.registry is not None:
+            self.registry.register_callback(self._on_persona_switch)
         self.warmup()
+
+    def _on_persona_switch(self, name):
+        try:
+            new_prompt = self.registry.current_prompt()
+        except Exception as e:
+            logger.warning(f"[LLM] 切角色时读取新 system_prompt 失败(不致命): {e}")
+            return
+        self.chat.init_chat({"role": self.init_chat_role, "content": new_prompt})
+        self.chat.buffer = []
+        logger.info(f"[LLM] 已切到角色「{name}」的人格, 对话历史已清空")
 
     def warmup(self):
         logger.info(f"Warming up {self.__class__.__name__}")

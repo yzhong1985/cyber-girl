@@ -19,6 +19,7 @@ import re
 import ssl
 import time
 import unicodedata
+import urllib.parse
 import urllib.request
 from threading import Event, Thread
 
@@ -94,13 +95,15 @@ class Qwen3TTSHandler(BaseHandler):
         logger.info(f"Qwen3-TTS loaded (faster-qwen3-tts): {model_name} on {device}")
         self.warmup()
 
-        if self.avatar_mode and self.filler_enabled:
-            self._pregenerate_fillers()
+        if self.avatar_mode:
+            if self.filler_enabled:
+                self._pregenerate_fillers()
             if self.registry is not None:
-                # 切角色 = 换音色, 池子里旧音色的过渡语得重新合成; 放后台线程避免
-                # 卡住切换面板那个HTTP请求(重新生成要跑好几秒Ditto推理)。
+                # 切角色 = 换音色+可能换形象照片, 池子里旧角色的过渡语得重新合成;
+                # 放后台线程避免卡住切换面板那个HTTP请求(照片切换+重新合成过渡语
+                # 加起来要跑好几秒)。
                 self.registry.register_callback(
-                    lambda _name: Thread(target=self._pregenerate_fillers, daemon=True).start()
+                    lambda name: Thread(target=self._on_persona_switch, args=(name,), daemon=True).start()
                 )
 
     def warmup(self):
@@ -311,6 +314,31 @@ class Qwen3TTSHandler(BaseHandler):
         # 生成已耗时约 1.3×dur；再等 dur 让浏览器把这段视频播完
         time.sleep(dur)
         self.should_listen.set()
+
+    def _on_persona_switch(self, name):
+        """切角色回调(后台线程里跑): 先切Ditto形象照片(同步等它切完), 再重新
+        预生成过渡语池——顺序不能反, 不然过渡语视频用的还是切换前那张脸。"""
+        self._switch_avatar_photo()
+        if self.filler_enabled:
+            self._pregenerate_fillers()
+
+    def _switch_avatar_photo(self):
+        """把 Ditto 形象服务的当前照片换成新角色绑定的那张(characters.json
+        里的 avatar_photo); 角色没配这个字段就保持不动(用启动时的默认照片)。"""
+        if self.registry is None:
+            return
+        photo = self.registry.current_avatar_photo()
+        if not photo:
+            return
+        try:
+            url = f"{self.avatar_base}/switch_avatar?path={urllib.parse.quote(photo)}"
+            urllib.request.urlopen(
+                urllib.request.Request(url, data=b"", method="POST"),
+                timeout=30, context=self._avatar_ssl_ctx()
+            ).read()
+            logger.info(f"[TTS] Ditto 形象已切换到: {photo}")
+        except Exception as e:
+            logger.warning(f"[TTS] Ditto 形象切换失败(不致命, 继续用旧照片): {e}")
 
     def _pregenerate_fillers(self):
         """合成当前角色语气的过渡语("让我想想哈"之类), 逐个POST给Ditto预生成

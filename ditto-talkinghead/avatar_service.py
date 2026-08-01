@@ -14,6 +14,9 @@ avatar_service.py  ——  Ditto 真人形象服务 (跑在 Ditto 的 py3.10 ven
 · GET  /startup_status : 播放页轮询, 拿当前加载进度显示进度条。
 · GET/POST /settings?stream_sentences=0|1 : 页面上的实时开关(分句流式播放等),
   不用重启管线——语音管线每次处理新回复前会来查一下当前值。
+· POST /switch_avatar?path=avatar/xxx.png : 热切换形象照片(多角色管理用),
+  换全局变量+重建待命循环+清空过渡语池, 不用重启(实测过不会触发torch.compile
+  重新编译)。
 
 用法: python avatar_service.py --avatar ./avatar/girl.png --port 8902
      python avatar_service.py --backend pytorch   # 需要对比/排障时退回全PyTorch
@@ -283,6 +286,24 @@ def _generate_filler(audio_f32: np.ndarray, index: int) -> str:
     return url
 
 
+def _switch_avatar(new_path: str):
+    """热切换当前形象照片(角色管理面板"切角色"用): 换 _avatar 全局变量 + 重建
+    待命循环 + 清空过渡语池(等语音管线那边用新角色的音色重新预生成)。
+
+    实测(2026-08-01): 换照片**不会**触发 warp_network/lmdm 的 torch.compile
+    重新编译(编译是按 GEN_KWARGS 里 max_size=768 这个固定裁剪尺寸特化的, 跟
+    照片内容无关), 额外开销只有 avatar_registrar 对新照片的一次性人脸注册
+    (~0.3s, 之后 _CachedRegistrar 会缓存住, 切回旧照片不用重新注册)。全程
+    不需要重启服务。"""
+    global _avatar
+    if new_path == _avatar:
+        return
+    _avatar = new_path
+    _build_idle_loop()   # 内部自己会拿 _gen_lock, 这里不能再包一层(会死锁)
+    with _filler_lock:
+        _filler_pool.clear()
+
+
 def _build_idle_loop(seconds=5):
     """用静音生成一段自带眨眼/微动的待命视频, 做成'正放+倒放'乒乓 → 无缝循环。
     同时充当预热 + 人脸检测确认。每次服务启动(换照片)都会重建, 自动匹配当前形象。"""
@@ -463,6 +484,18 @@ def serve(port, avatar_path, tls_cert=None, tls_key=None):
                 with _settings_lock:
                     settings = dict(_settings)
                 return self._bytes(200, "application/json", json.dumps(settings).encode())
+            if path == "/switch_avatar":
+                from urllib.parse import parse_qs, urlparse
+                qs = parse_qs(urlparse(self.path).query)
+                new_path = qs.get("path", [""])[0]
+                if not new_path or not os.path.isfile(new_path):
+                    return self._bytes(400, "application/json",
+                                       json.dumps({"error": f"照片文件不存在: {new_path}"}).encode())
+                try:
+                    _switch_avatar(new_path)
+                    return self._bytes(200, "application/json", b'{"ok":true}')
+                except Exception as e:
+                    return self._bytes(500, "application/json", json.dumps({"error": str(e)}).encode())
             if path == "/reset_fillers":
                 with _filler_lock:
                     _filler_pool.clear()
