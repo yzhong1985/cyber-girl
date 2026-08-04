@@ -397,7 +397,11 @@ def serve(port, avatar_path, tls_cert=None, tls_key=None):
             path = self.path.split("?", 1)[0]
             if path in ("/", ""):
                 html = Path("player.html").read_bytes()   # 实时读文件, 改样式不用重启
-                return self._bytes(200, "text/html; charset=utf-8", html)
+                # 页面里的开关(过渡语/分句流式/模式切换)全靠这份JS是最新的才
+                # 生效; 不禁缓存的话浏览器可能拿旧版本(尤其是这个文件改得很
+                # 勤), 页面上点开关却"看起来没反应"就是这么来的
+                return self._bytes(200, "text/html; charset=utf-8", html,
+                                   {"Cache-Control": "no-store"})
             if path == "/idle.png":
                 return self._bytes(200, "image/png", Path(_avatar).read_bytes())
             if path == "/startup_status":

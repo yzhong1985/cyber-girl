@@ -9,8 +9,10 @@
  /* 透明人像(待命循环 / 回复视频): 居中铺满高度, 靠自身微动"活" */
  .avatar{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
    height:100vh;max-width:100vw;object-fit:contain;z-index:1;background:transparent}
- /* 待命时给一点“呼吸”起伏(纯上下缩放, 不旋转不歪), 让身体也似乎在轻微动 */
- :root{ --breath:1.018; --breath-time:4.5s; }
+ /* 待命时的"呼吸"起伏——纯CSS缩放模拟, 跟实际口型/表情不同步, 看起来假,
+    先关掉(--breath设成1=缩放前后一样, 动画还在跑但视觉上没有效果; 想彻底
+    去掉可以把 #idle 的 animation 那行也删了) */
+ :root{ --breath:1; --breath-time:4.5s; }
  #idle{transform-origin:50% 100%;
    animation:breathe var(--breath-time) ease-in-out infinite}
  @keyframes breathe{
@@ -67,9 +69,12 @@
        st=document.getElementById('st'), gate=document.getElementById('gate'),
        micEl=document.getElementById('mic'), capEl=document.getElementById('cap');
  const q=[]; let playing=false, ready=false;
- if(location.hostname==='127.0.0.1'||location.hostname==='localhost'){
-   document.getElementById('panelLink').style.display='';
- }
+ // 角色管理面板(8900)只监听127.0.0.1: 只要浏览器跟服务在同一台机器上就永远
+ // 连得通, 跟这个对话页本身是用127.0.0.1还是局域网IP打开的无关——所以不猜
+ // 地址, 直接探测连不连得通(局域网设备/手机探测会失败, 链接保持隐藏)
+ fetch('http://127.0.0.1:8900/', {mode:'no-cors', cache:'no-store'})
+   .then(()=>{ document.getElementById('panelLink').style.display=''; })
+   .catch(()=>{});
  const IDLE_RATE=0.2;                 // 待命头部动作速度(1=原速, 越小越慢越稳)
  idle.playbackRate=IDLE_RATE;
  idle.play().catch(()=>{});

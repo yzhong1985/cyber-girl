@@ -16,6 +16,7 @@ import base64
 import json
 import logging
 import re
+import subprocess
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -178,8 +179,8 @@ input[type=file]{width:100%%;color:#a8a8c0;font-size:13px}
   <input type=text id=label placeholder="例如 米卡 · 元气向">
   <label>形象照片</label>
   <input type=file id=photo accept="image/*">
-  <label>参考语音(wav, 5~15秒清晰人声, 决定音色)</label>
-  <input type=file id=voice accept="audio/wav,.wav">
+  <label>参考语音(wav/mp3/m4a等, 5~15秒清晰人声, 决定音色)</label>
+  <input type=file id=voice accept="audio/*">
   <label>参考语音对应文字(留空则自动转写, 转写要几十秒)</label>
   <input type=text id=reftext placeholder="留空自动转写">
   <label>性格设定(system prompt)</label>
@@ -252,6 +253,32 @@ async function create(){
 </script>"""
 
 _NAME_RE = re.compile(r"^[a-zA-Z0-9_-]{1,32}$")
+
+
+def _ensure_readable_audio(path: Path) -> Path:
+    """参考语音要能被 soundfile(libsndfile) 直接读——wav/mp3 之类原生支持的
+    格式原样返回；m4a(AAC)这种 libsndfile 读不了的, 用 ffmpeg 转成 wav。
+    转完删掉原文件, 返回新路径(调用方要用这个新路径去更新 characters.json
+    里存的 ref_audio, 不然存的还是那个读不出来的原文件)。"""
+    import soundfile as sf
+    try:
+        sf.info(str(path))
+        return path
+    except Exception:
+        pass
+    wav_path = path.with_suffix(".wav")
+    try:
+        result = subprocess.run(
+            ["ffmpeg", "-y", "-i", str(path), "-ar", "24000", "-ac", "1", str(wav_path)],
+            capture_output=True, timeout=60,
+        )
+    except FileNotFoundError:
+        raise RuntimeError("系统没装 ffmpeg, 没法转码这个格式")
+    if result.returncode != 0:
+        stderr_tail = result.stderr.decode(errors="replace")[-300:]
+        raise RuntimeError(f"ffmpeg 转码失败: {stderr_tail}")
+    path.unlink(missing_ok=True)
+    return wav_path
 
 
 def serve_panel(registry: VoiceRegistry, port=8900):
@@ -338,9 +365,13 @@ def serve_panel(registry: VoiceRegistry, port=8900):
             (ditto_avatar_dir / f"user_{name}.{photo_ext}").write_bytes(photo_bytes)
 
             voices_dir.mkdir(parents=True, exist_ok=True)
-            voice_rel = f"voices/user_{name}.{voice_ext}"
             voice_path = voices_dir / f"user_{name}.{voice_ext}"
             voice_path.write_bytes(voice_bytes)
+            try:
+                voice_path = _ensure_readable_audio(voice_path)
+            except Exception as e:
+                return self._json(400, {"ok": False, "error": f"参考语音处理失败: {e}"})
+            voice_rel = f"voices/{voice_path.name}"
 
             ref_text = ref_text_override
             if not ref_text:
