@@ -8,27 +8,44 @@
 #   bash start_avatar.sh --skip-mask  强制关抠图: 照片原背景, 每句快 ~40%(约省 2s+)
 #   bash start_avatar.sh --matte      强制开抠图
 #   bash start_avatar.sh --web        网页版: 浏览器采麦(WebSocket), 自签HTTPS供局域网访问
+#   bash start_avatar.sh --engine=livetalking   命令行临时切形象后端, 不改配置文件
+#
+# 形象后端(config.env 的 AVATAR_ENGINE=ditto/livetalking)可以换成 LiveTalking
+# (独立项目 /mnt/e/Projects/livetalking-lab, wav2lip256/musetalk, 延迟低画质糊)
+# 代替 Ditto(扩散模型, 延迟高画质自然)。engine=livetalking 时画面在它自己的页面
+# (127.0.0.1:8010)看, 不是 127.0.0.1:8902; 暂不支持 --web(见下面代码里的报错提示)。
 # ========================================================================
 set -e
 ROOT=/mnt/e/Projects/cyberGirl
 SCRIPT_START=$(date +%s)
 log() { echo "[$(date +%H:%M:%S)] $*"; }
 
-# ---- 命令行参数(优先级高于 config.env): --skip-mask 关抠图, --web 开网页版 ----
-MATTE_CLI=""   # 空=听配置; on/off=命令行强制
-WEB_CLI=""     # 空=听配置; on=命令行强制开网页版
+# 外部传入的 DITTO_AVATAR_URL(比如指向 livetalking-lab 的桥接服务)优先于本脚本
+# 自己的 Ditto 形象服务: 设了就跳过第2步(省~100s编译预热+显存), 第3步直接用这个值,
+# 不会像以前那样被脚本自己的 export 悄悄覆盖回 Ditto 的地址。
+EXTERNAL_AVATAR_URL="${DITTO_AVATAR_URL:-}"
+
+# ---- 命令行参数(优先级高于 config.env): --skip-mask 关抠图, --web 开网页版, --engine=切后端 ----
+MATTE_CLI=""     # 空=听配置; on/off=命令行强制
+WEB_CLI=""       # 空=听配置; on=命令行强制开网页版
+ENGINE_CLI=""    # 空=听配置; ditto/livetalking=命令行强制
 for arg in "$@"; do
   case "$arg" in
     --skip-mask|--no-matte|--no-mask) MATTE_CLI="off" ;;
     --mask|--matte)                   MATTE_CLI="on" ;;
     --web)                            WEB_CLI="on" ;;
-    *) echo "未知参数: $arg (可用: --skip-mask / --matte / --web)"; exit 1 ;;
+    --engine=*)                       ENGINE_CLI="${arg#--engine=}" ;;
+    *) echo "未知参数: $arg (可用: --skip-mask / --matte / --web / --engine=ditto|livetalking)"; exit 1 ;;
   esac
 done
 
 # ---- 读配置(config.env), 缺项用默认值兜底 ----
 [ -f "$ROOT/config.env" ] && source "$ROOT/config.env"
 : "${PERSONA:=xiaoman}"
+: "${AVATAR_ENGINE:=ditto}"
+[ -n "$ENGINE_CLI" ] && AVATAR_ENGINE="$ENGINE_CLI"
+: "${LIVETALKING_MODEL:=wav2lip}"
+: "${LIVETALKING_ROOT:=/mnt/e/Projects/livetalking-lab}"
 : "${AVATAR_PHOTO:=avatar/girl.png}"
 : "${AVATAR_MATTE:=1}"
 : "${AVATAR_BACKEND:=onnx}"
@@ -53,6 +70,17 @@ done
 WEB=0
 if [ "$WEB_CLI" = "on" ] || { [ -z "$WEB_CLI" ] && [ "$WEB_MODE" = "1" ]; }; then
   WEB=1
+fi
+
+# --web + AVATAR_ENGINE=livetalking 这个组合暂不支持: --web 模式下麦克风采集靠
+# player.html 的 WebSocket 页面, 而这个页面是 Ditto 的 avatar_service.py 顺带serve
+# 出来的——engine=livetalking 时第2步根本不启动 avatar_service.py, 没人serve这个
+# 页面, 会静默失败。等 player.html 接入 LiveTalking WebRTC(livetalking-lab项目
+# docs/进度.md 里的路线图)才能支持。engine=livetalking 现在只支持本机麦克风模式。
+if [ "$WEB" = "1" ] && [ "$AVATAR_ENGINE" = "livetalking" ]; then
+  echo "✗ 暂不支持 --web + AVATAR_ENGINE=livetalking 组合(麦克风采集页面没人serve)。"
+  echo "  engine=livetalking 请去掉 --web / WEB_MODE=0, 用本机麦克风模式。"
+  exit 1
 fi
 
 # ---- 网页版: 首次用自签证书(证书不存在才生成; 换了局域网/IP变了要手动删掉 certs/ 重生成) ----
@@ -105,13 +133,25 @@ else
   done
 fi
 
-# ---- 2) Ditto 形象服务(独立 py3.10 venv) ----
+# ---- 2) 形象服务: Ditto(独立 py3.10 venv) 或 LiveTalking(独立项目 livetalking-lab) ----
 # 注意: 抠图开/关、生成后端都是服务启动时定死的; 若服务已在运行, 改配置不生效(需先 stop.sh)
 SCHEME="http"; CURL_INSECURE=""
 [ "$WEB" = "1" ] && { SCHEME="https"; CURL_INSECURE="-k"; }
-if curl -s $CURL_INSECURE --max-time 3 "${SCHEME}://127.0.0.1:8902/idle.png" -o /dev/null 2>/dev/null; then
+if [ -n "$EXTERNAL_AVATAR_URL" ]; then
+  log "→ 跳过形象服务启动(DITTO_AVATAR_URL 已外部指定: $EXTERNAL_AVATAR_URL)"
+elif [ "$AVATAR_ENGINE" = "livetalking" ]; then
+  # ---- 2a) LiveTalking: 直接复用 livetalking-lab 自己的 start.sh, 不重复实现
+  #          健康检查/等待逻辑(它自己就会判断"已在运行"跳过重启、打印进度点)。----
+  if [ ! -d "$LIVETALKING_ROOT" ]; then
+    echo "✗ 找不到 LIVETALKING_ROOT=$LIVETALKING_ROOT (config.env 配置的路径), 检查一下"
+    exit 1
+  fi
+  log "→ 启动 LiveTalking(livetalking-lab, model=$LIVETALKING_MODEL)..."
+  ( cd "$LIVETALKING_ROOT" && bash start.sh --model "$LIVETALKING_MODEL" )
+elif curl -s $CURL_INSECURE --max-time 3 "${SCHEME}://127.0.0.1:8902/idle.png" -o /dev/null 2>/dev/null; then
   log "✓ Ditto 形象服务已在运行(抠图/后端/网页版沿用上次启动; 想改需先 bash stop.sh)"
 else
+  # ---- 2b) Ditto ----
   COMPILE_FLAG=""
   WAIT_HINT="约 30s"
   COMPILE_HINT=""
@@ -151,7 +191,15 @@ fi
 cd "$ROOT/speech-to-speech"
 source "$ROOT/.venv/bin/activate"
 export PULSE_SERVER=unix:/mnt/wslg/PulseServer
-export DITTO_AVATAR_URL="${SCHEME}://127.0.0.1:8902/generate"
+# 形象后端地址: 外部覆盖 > AVATAR_ENGINE 对应的默认地址
+if [ -n "$EXTERNAL_AVATAR_URL" ]; then
+  AVATAR_URL="$EXTERNAL_AVATAR_URL"
+elif [ "$AVATAR_ENGINE" = "livetalking" ]; then
+  AVATAR_URL="http://127.0.0.1:9000/generate"   # livetalking-lab 桥接服务默认端口; 改了要同步这里
+else
+  AVATAR_URL="${SCHEME}://127.0.0.1:8902/generate"
+fi
+export DITTO_AVATAR_URL="$AVATAR_URL"
 export AVATAR_FILLER="$AVATAR_FILLER"
 export AVATAR_FILLER_DELAY_MIN="$AVATAR_FILLER_DELAY_MIN"
 export AVATAR_FILLER_DELAY_MAX="$AVATAR_FILLER_DELAY_MAX"
@@ -175,6 +223,10 @@ if [ "$WEB" = "1" ]; then
     echo "   2. 其它设备浏览器先打开 https://${LAN_IP}:${WS_PORT}/ 点「继续前往」信任证书(WS连接本身无法弹这个提示, 必须先单独访问一次)"
     echo "   3. 再打开 https://${LAN_IP}:8902/ 点「进入」, 同样先信任证书, 然后允许麦克风权限"
   fi
+elif [ -n "$EXTERNAL_AVATAR_URL" ]; then
+  echo "  形象后端是外部指定的($EXTERNAL_AVATAR_URL), 画面不在 127.0.0.1:8902, 去对应服务自己的页面看; 麦克风照常本机采集"
+elif [ "$AVATAR_ENGINE" = "livetalking" ]; then
+  echo "  浏览器打开 http://127.0.0.1:8010/index.html 点『开始连接』, 然后对麦克风说话(本机麦克风, 跟 Ditto 版一样)"
 else
   echo "  浏览器打开 http://127.0.0.1:8902/ 点「进入」, 然后对麦克风说话"
 fi
