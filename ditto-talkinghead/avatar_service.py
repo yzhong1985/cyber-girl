@@ -20,6 +20,12 @@ avatar_service.py  ——  Ditto 真人形象服务 (跑在 Ditto 的 py3.10 ven
 
 用法: python avatar_service.py --avatar ./avatar/girl.png --port 8902
      python avatar_service.py --backend pytorch   # 需要对比/排障时退回全PyTorch
+     python avatar_service.py --lite --livetalking-url http://127.0.0.1:8010
+         轻量模式: 不加载 Ditto 模型(跳过 torch/StreamSDK/RVM 那一堆), 只保留
+         HTTP 服务本体——serve player.html、/settings、/startup_status、
+         /backend_info。给 AVATAR_ENGINE=livetalking 用: 这种模式下 Ditto 根本
+         不生成任何东西, 画面由 player.html 直接跟 LiveTalking 建 WebRTC 连接,
+         这个服务只是保住 127.0.0.1:8902 这个书签不变、继续 serve 页面本身。
 """
 import argparse, io, json, math, os, random, ssl, threading, time, wave, subprocess
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -380,8 +386,20 @@ PAGE = """<!doctype html><html lang=zh><head><meta charset=utf-8>
 </script></body></html>"""
 
 
-def serve(port, avatar_path, tls_cert=None, tls_key=None):
-    load_sdk(avatar_path)
+def serve(port, avatar_path, tls_cert=None, tls_key=None, lite=False, livetalking_url=None):
+    global _avatar
+    if lite:
+        _avatar = avatar_path
+        print(f"[avatar] 轻量模式(--lite): 跳过 Ditto 模型加载, 只 serve 页面 + /settings, "
+              f"画面由 player.html 直接连 LiveTalking({livetalking_url})", flush=True)
+    else:
+        load_sdk(avatar_path)
+
+    # lite 模式下这些端点没有 _sdk 可用, 直接 501 而不是让内部 None 报错(理论上不会被
+    # 调到——livetalking 模式的音频是发给桥接服务而不是这个进程的 /generate——但 API
+    # 层面明确拒绝更清楚)
+    _DITTO_ONLY_PATHS = {"/idle.png", "/play_filler", "/generate", "/generate_filler",
+                         "/switch_avatar", "/reset_fillers"}
 
     class H(BaseHTTPRequestHandler):
         def log_message(self, *a): pass
@@ -395,6 +413,9 @@ def serve(port, avatar_path, tls_cert=None, tls_key=None):
 
         def do_GET(self):
             path = self.path.split("?", 1)[0]
+            if lite and path in _DITTO_ONLY_PATHS:
+                return self._bytes(501, "application/json",
+                                   json.dumps({"error": "lite模式下不可用"}).encode())
             if path in ("/", ""):
                 html = Path("player.html").read_bytes()   # 实时读文件, 改样式不用重启
                 # 页面里的开关(过渡语/分句流式/模式切换)全靠这份JS是最新的才
@@ -402,6 +423,11 @@ def serve(port, avatar_path, tls_cert=None, tls_key=None):
                 # 勤), 页面上点开关却"看起来没反应"就是这么来的
                 return self._bytes(200, "text/html; charset=utf-8", html,
                                    {"Cache-Control": "no-store"})
+            if path == "/backend_info":
+                info = {"backend": "livetalking" if lite else "ditto"}
+                if lite:
+                    info["livetalking_url"] = livetalking_url
+                return self._bytes(200, "application/json", json.dumps(info).encode())
             if path == "/idle.png":
                 return self._bytes(200, "image/png", Path(_avatar).read_bytes())
             if path == "/startup_status":
@@ -467,6 +493,9 @@ def serve(port, avatar_path, tls_cert=None, tls_key=None):
 
         def do_POST(self):
             path = self.path.split("?", 1)[0]
+            if lite and path in _DITTO_ONLY_PATHS:
+                return self._bytes(501, "application/json",
+                                   json.dumps({"error": "lite模式下不可用"}).encode())
             if path == "/startup_status":
                 from urllib.parse import parse_qs, urlparse
                 qs = parse_qs(urlparse(self.path).query)
@@ -569,7 +598,16 @@ if __name__ == "__main__":
     ap.set_defaults(compile_lmdm=None)
     ap.add_argument("--tls-cert", default=None, help="TLS 证书路径; 和 --tls-key 一起给才开 HTTPS(网页版局域网访问需要)")
     ap.add_argument("--tls-key", default=None, help="TLS 私钥路径")
+    ap.add_argument("--lite", action="store_true",
+                    help="轻量模式: 不加载 Ditto 模型, 只 serve 页面+/settings, 配合 AVATAR_ENGINE=livetalking 用")
+    ap.add_argument("--livetalking-url", default="http://127.0.0.1:8010",
+                    help="--lite 模式下告诉前端去连哪个 LiveTalking 地址")
     args = ap.parse_args()
+    if args.lite:
+        print("[avatar] --lite 模式: 跳过抠图/生成后端/编译加速这些 Ditto 专属参数", flush=True)
+        serve(args.port, args.avatar, tls_cert=args.tls_cert, tls_key=args.tls_key,
+              lite=True, livetalking_url=args.livetalking_url)
+        raise SystemExit(0)  # serve()正常情况下serve_forever()不返回, 这里理论上到不了, 图个清楚
     # 抠图开关: 命令行 --no-matte 优先; 否则看环境变量 AVATAR_MATTE(0/false 关); 默认开
     if args.matte is None:
         _matte = os.environ.get("AVATAR_MATTE", "1").lower() not in ("0", "false", "no", "off")

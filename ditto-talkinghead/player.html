@@ -75,44 +75,116 @@
  fetch('http://127.0.0.1:8900/', {mode:'no-cors', cache:'no-store'})
    .then(()=>{ document.getElementById('panelLink').style.display=''; })
    .catch(()=>{});
- const IDLE_RATE=0.2;                 // 待命头部动作速度(1=原速, 越小越慢越稳)
- idle.playbackRate=IDLE_RATE;
- idle.play().catch(()=>{});
- gate.onclick=()=>{ready=true; gate.style.display='none'; idle.play().catch(()=>{}); pump(); startMic();};
- function showIdle(){
-   vid.style.display='none'; vid.pause();
-   idle.style.display='block'; idle.playbackRate=IDLE_RATE; idle.play().catch(()=>{}); st.textContent='待命';
- }
- function pump(){
-   if(playing||!ready) return;
-   const next=q.shift();
-   if(!next){showIdle(); return;}
-   playing=true; st.textContent='说话中';
-   vid.muted=false;
-   // 先把新视频加载到"有画面可播"了, 再隐藏待命循环——反过来做(先隐藏待命,
-   // 再等新视频加载)中间会有一小段两个<video>都没画面, 背景色露出来就是那个
-   // "闪一下"。loadeddata 是第一帧解码好、可以出画面的最早时机。
-   vid.onloadeddata=()=>{
-     vid.onloadeddata=null;
-     idle.pause(); idle.style.display='none';
-     vid.style.display='block';
-     vid.play().catch(()=>{playing=false;});
+ // ---- 画面来源: ditto(SSE推mp4段, 待命/说话两段视频切换) 或
+ //      livetalking(WebRTC连续流, 一条流自带待命+说话, 不用切换) ----
+ // avatar_service.py 的 /backend_info 告诉我们现在是哪种; 老版本没有这个
+ // 端点(404/网络错误)时按 ditto 处理, 向后兼容不升级 avatar_service.py 也能用。
+ function initDitto(){
+   const IDLE_RATE=0.2;                 // 待命头部动作速度(1=原速, 越小越慢越稳)
+   idle.playbackRate=IDLE_RATE;
+   idle.play().catch(()=>{});
+   function showIdle(){
+     vid.style.display='none'; vid.pause();
+     idle.style.display='block'; idle.playbackRate=IDLE_RATE; idle.play().catch(()=>{}); st.textContent='待命';
+   }
+   function pump(){
+     if(playing||!ready) return;
+     const next=q.shift();
+     if(!next){showIdle(); return;}
+     playing=true; st.textContent='说话中';
+     vid.muted=false;
+     // 先把新视频加载到"有画面可播"了, 再隐藏待命循环——反过来做(先隐藏待命,
+     // 再等新视频加载)中间会有一小段两个<video>都没画面, 背景色露出来就是那个
+     // "闪一下"。loadeddata 是第一帧解码好、可以出画面的最早时机。
+     vid.onloadeddata=()=>{
+       vid.onloadeddata=null;
+       idle.pause(); idle.style.display='none';
+       vid.style.display='block';
+       vid.play().catch(()=>{playing=false;});
+     };
+     vid.src=next;
+   }
+   vid.onended=()=>{playing=false; showIdle(); pump();};
+   vid.onerror=()=>{playing=false; showIdle(); pump();};
+   const es=new EventSource('/events');
+   es.onmessage=e=>{
+     try{
+       const d=JSON.parse(e.data);
+       if(d.video){
+         // 过渡语视频固定 /video/filler_*.mp4 命名, 跟正式回复 /video/seg_*.mp4
+         // 天然可区分; 开关关了就直接跳过不播(纯前端, 不用通知后端)
+         if(!fillerEnabled && d.video.includes('/video/filler_')) return;
+         q.push(d.video); pump();
+       }
+     }catch(_){}
    };
-   vid.src=next;
+   return { onGateOpen(){ idle.play().catch(()=>{}); pump(); } };
  }
- vid.onended=()=>{playing=false; showIdle(); pump();};
- vid.onerror=()=>{playing=false; showIdle(); pump();};
- const es=new EventSource('/events');
- es.onmessage=e=>{
-   try{
-     const d=JSON.parse(e.data);
-     if(d.video){
-       // 过渡语视频固定 /video/filler_*.mp4 命名, 跟正式回复 /video/seg_*.mp4
-       // 天然可区分; 开关关了就直接跳过不播(纯前端, 不用通知后端)
-       if(!fillerEnabled && d.video.includes('/video/filler_')) return;
-       q.push(d.video); pump();
-     }
-   }catch(_){}
+
+ function initLiveTalking(livetalkingUrl){
+   // 没有独立待机视频文件——LiveTalking 一条 WebRTC 流本身就连续包含待机和
+   // 说话两种状态, 不需要 ditto 那套 idle/vid 双元素切换, 复用 #vid 常驻显示。
+   idle.style.display='none';
+   let pc=null, connecting=false;
+   function waitIce(p){
+     if(p.iceGatheringState==='complete') return Promise.resolve();
+     return new Promise(res=>{
+       const t=setTimeout(res,3000);
+       p.addEventListener('icegatheringstatechange',()=>{
+         if(p.iceGatheringState==='complete'){clearTimeout(t); res();}
+       });
+     });
+   }
+   async function connect(){
+     if(pc||connecting) return;
+     connecting=true; st.textContent='连接中';
+     try{
+       pc=new RTCPeerConnection({iceServers:[{urls:'stun:stun.l.google.com:19302'}]});
+       pc.addTransceiver('video',{direction:'recvonly'});
+       pc.addTransceiver('audio',{direction:'recvonly'});
+       pc.ontrack=e=>{
+         vid.srcObject=e.streams[0];
+         vid.style.display='block';
+         vid.muted=false;
+         vid.play().catch(()=>{});
+       };
+       pc.onconnectionstatechange=()=>{
+         if(!pc) return;
+         if(['failed','closed','disconnected'].includes(pc.connectionState)){
+           st.textContent='连接断开, 重连中…'; pc=null;
+           setTimeout(connect, 3000);
+         }else if(pc.connectionState==='connected'){
+           st.textContent='已连接';
+         }
+       };
+       await pc.setLocalDescription(await pc.createOffer());
+       await waitIce(pc);
+       const r=await fetch(livetalkingUrl+'/offer', {
+         method:'POST', headers:{'Content-Type':'application/json'},
+         body: JSON.stringify({sdp:pc.localDescription.sdp, type:pc.localDescription.type})
+       });
+       if(!r.ok) throw new Error('offer HTTP '+r.status);
+       const ans=await r.json();
+       await pc.setRemoteDescription(ans);
+     }catch(e){
+       st.textContent='连接失败, 重试中…'; pc=null;
+       setTimeout(connect, 5000);
+     }finally{ connecting=false; }
+   }
+   return { onGateOpen(){ connect(); } };
+ }
+
+ let playback=null;
+ const backendReady = fetch('/backend_info', {cache:'no-store'}).then(r=>r.json())
+   .then(d=>({backend:d.backend||'ditto', livetalkingUrl:d.livetalking_url||''}))
+   .catch(()=>({backend:'ditto', livetalkingUrl:''}));   // 老版本没有这个端点, 按ditto走
+
+ gate.onclick=async ()=>{
+   ready=true; gate.style.display='none';
+   const {backend, livetalkingUrl} = await backendReady;
+   playback = backend==='livetalking' ? initLiveTalking(livetalkingUrl) : initDitto();
+   playback.onGateOpen();
+   startMic();
  };
 
  // ---- 设置: 输入模式(持续聆听/按住说话) + 过渡语开关, 记 localStorage ----

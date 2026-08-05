@@ -148,6 +148,24 @@ elif [ "$AVATAR_ENGINE" = "livetalking" ]; then
   fi
   log "→ 启动 LiveTalking(livetalking-lab, model=$LIVETALKING_MODEL)..."
   ( cd "$LIVETALKING_ROOT" && bash start.sh --model "$LIVETALKING_MODEL" )
+  # ---- 2a续) 轻量版 avatar_service.py: 光是 LiveTalking 本身不 serve player.html,
+  #            这里补一个只管页面、不加载 Ditto 模型的轻量实例, 保住 127.0.0.1:8902
+  #            这个书签不变(player.html 加载时探测 /backend_info 决定画面走哪条路,
+  #            见 Phase2 的 player.html 改动)。----
+  if curl -s $CURL_INSECURE --max-time 3 "${SCHEME}://127.0.0.1:8902/backend_info" -o /dev/null 2>/dev/null; then
+    log "✓ 播放页服务(lite)已在运行"
+  else
+    log "→ 启动播放页服务(lite, 只serve页面, 不加载Ditto模型)..."
+    ( cd "$ROOT/ditto-talkinghead" \
+      && nohup .venv/bin/python avatar_service.py --lite --port 8902 \
+         --livetalking-url "http://127.0.0.1:8010" $TLS_FLAG_AVATAR \
+         > "$ROOT/_avatar_svc.log" 2>&1 & )
+    echo -n "  等待播放页服务就绪 "
+    for i in $(seq 1 30); do
+      curl -s $CURL_INSECURE --max-time 3 "${SCHEME}://127.0.0.1:8902/backend_info" -o /dev/null 2>/dev/null && { echo " ✓ [$(date +%H:%M:%S)]"; break; }
+      echo -n "."; sleep 1
+    done
+  fi
 elif curl -s $CURL_INSECURE --max-time 3 "${SCHEME}://127.0.0.1:8902/idle.png" -o /dev/null 2>/dev/null; then
   log "✓ Ditto 形象服务已在运行(抠图/后端/网页版沿用上次启动; 想改需先 bash stop.sh)"
 else
@@ -226,7 +244,7 @@ if [ "$WEB" = "1" ]; then
 elif [ -n "$EXTERNAL_AVATAR_URL" ]; then
   echo "  形象后端是外部指定的($EXTERNAL_AVATAR_URL), 画面不在 127.0.0.1:8902, 去对应服务自己的页面看; 麦克风照常本机采集"
 elif [ "$AVATAR_ENGINE" = "livetalking" ]; then
-  echo "  浏览器打开 http://127.0.0.1:8010/index.html 点『开始连接』, 然后对麦克风说话(本机麦克风, 跟 Ditto 版一样)"
+  echo "  浏览器打开 http://127.0.0.1:8902/ 点「进入」, 然后对麦克风说话(画面走 LiveTalking, 页面跟 Ditto 版是同一个)"
 else
   echo "  浏览器打开 http://127.0.0.1:8902/ 点「进入」, 然后对麦克风说话"
 fi
