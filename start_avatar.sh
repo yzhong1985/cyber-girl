@@ -218,6 +218,16 @@ else
   AVATAR_URL="${SCHEME}://127.0.0.1:8902/generate"
 fi
 export DITTO_AVATAR_URL="$AVATAR_URL"
+# 播放页(player.html所在的avatar_service.py)地址, 专给 utils/utils.py 的
+# report_startup() 上报启动进度条用——固定 8902, 跟 DITTO_AVATAR_URL(音频发
+# 去哪, livetalking 模式下是桥接服务9000, 不是页面本身)是两回事, 之前俩共用
+# 一个变量派生, livetalking 模式下派生出错的地址, 页面进度条卡死在0%(实测
+# 踩到)。EXTERNAL_AVATAR_URL 覆盖模式下第2步根本没起任何页面服务, 不设这个
+# 变量, report_startup() 退回旧的从 DITTO_AVATAR_URL 派生(拿不到就直接跳过,
+# 非致命)。
+if [ -z "$EXTERNAL_AVATAR_URL" ]; then
+  export AVATAR_PAGE_URL="${SCHEME}://127.0.0.1:8902"
+fi
 export AVATAR_FILLER="$AVATAR_FILLER"
 export AVATAR_FILLER_DELAY_MIN="$AVATAR_FILLER_DELAY_MIN"
 export AVATAR_FILLER_DELAY_MAX="$AVATAR_FILLER_DELAY_MAX"
